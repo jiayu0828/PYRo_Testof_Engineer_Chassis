@@ -1,0 +1,64 @@
+/**
+ * @version 1.1.0
+ */
+
+#ifndef MOTOR_BASE_H
+#define MOTOR_BASE_H
+
+#include "cmsis_os.h"
+#include "main.h"
+#include "pyro_bsp_can.h"
+#include "pyro_core_def.h"
+#include <cstdint>
+
+#include <memory>
+#include <vector>
+
+
+
+namespace pyro
+{
+class motor_base_t
+{
+  public:
+    motor_base_t(bsp_can::which_can which);
+    virtual ~motor_base_t(void);//先不实现
+
+    virtual status_t enable()        = 0;
+    virtual status_t disable()       = 0;
+
+    virtual status_t update_feedback(void)     = 0;
+    virtual status_t send_torque(float torque) = 0;
+
+    int8_t get_temperature(void);
+    float get_current_position(void);
+    float get_current_rotate(void);
+    float get_current_torque(void);
+
+    bool is_enable(void);
+    bool is_online(void);
+
+    // 设置反馈数据范围（用于解析）
+    // 提供默认实现，派生类可选择性覆盖
+    virtual void set_position_range(float min, float max);
+    virtual void set_rotate_range(float min, float max);
+    virtual void set_torque_range(float min, float max);
+
+  protected:
+    bsp_can::which_can _which_can;
+    can_drv_t *_can_drv;
+
+    bool _enable;
+    bool _online;
+    float _last_update_time;
+    int8_t _temperature;
+
+    float _current_position;
+    float _current_rotate;
+    float _current_torque;
+
+    can_msg_buffer_t *_feedback_msg;
+};
+}; // namespace pyro
+
+#endif
