@@ -30,6 +30,7 @@ Chassis/pyro_engineer_chassis.cpp
 Chassis/fsm/pyro_engineer_active_state.cpp
 Chassis/fsm/pyro_engineer_passive_state.cpp
 Application/Chassis_board/pyro_chassis_app.cpp
+Application/Chassis_board/pyro_chassis_debug.cpp
 Communication/Chassis_board/pyro_chassis_remote.cpp
 )
 if (BOARD STREQUAL "ARM_BOARD")
@@ -52,7 +53,7 @@ elseif (BOARD STREQUAL "CHASSIS_BOARD")
     target_compile_definitions(Engineer PRIVATE
     DR16_UART=PYRO_UART5
     #SUPER_CAP_UART=PYRO_UART1
-    #DEBUG_UART=PYRO_UART1
+    DEBUG_UART=PYRO_UART1
     #这两个UART灵活变通一下
     #REFEREE_UART=PYRO_UART10
     #INTERBOARD_UART=PYRO_UART7

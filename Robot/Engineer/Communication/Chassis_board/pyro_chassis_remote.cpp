@@ -32,8 +32,7 @@ static float apply_deadzone(float value)
 }
 
 // 使能拨杆读取。
-// 注意：本库 DR16 解包存在交叉命名——物理左拨杆 s1 被映射到 switches.right。
-// 若实测左拨杆无效，把下面的 right 改为 left 即可（仅此一处）。
+//右拨杆本身，向上使能
 static bool read_enable_switch(const virtual_rc_t &rc)
 {
     return rc.switches.right.current_pos == sw_pos_t::UP;
@@ -45,7 +44,7 @@ static void rc_to_cmd()
     const auto &rc = rc_drv_t::read();
 
     // 符号为常规约定，需结合实物实测确认
-    s_cmd.chassis.vx = -apply_deadzone(rc.axes.ly) * MAX_CHASSIS_VX;
+    s_cmd.chassis.vx = apply_deadzone(rc.axes.ly) * MAX_CHASSIS_VX;
     s_cmd.chassis.vy = -apply_deadzone(rc.axes.lx) * MAX_CHASSIS_VY;
     s_cmd.chassis.wz = -apply_deadzone(rc.axes.rx) * MAX_CHASSIS_WZ;
 

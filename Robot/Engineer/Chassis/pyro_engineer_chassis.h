@@ -53,12 +53,14 @@ struct engineer_deps_t
     struct motor_deps_t
     {
         motor_base_t *mecanum[4]{nullptr}; // 4 个麦轮电机 FL, FR, BL, BR
+        motor_base_t *track[2]{nullptr};   // 2 个履带电机 L, R（达妙 4310，基类指针兼容）
     };
 
     // PID 控制对象
     struct pid_deps_t
     {
         pid_t *mecanum_pid[4]{nullptr}; // 麦轮速度环 PID
+        pid_t *track_pid[2]{nullptr};   // 履带速度环 PID
     };
 
     motor_deps_t motor_deps{};
@@ -72,10 +74,17 @@ struct engineer_deps_t
 // 运行时数据
 struct engineer_data_ctx_t
 {
+    // ---- 4 个麦轮 ----
     bool  wheel_online[4]{};
     float current_wheel_rpm[4]{}; // 反馈：轮轴 RPM
     float target_wheel_rpm[4]{};  // 目标：轮轴 RPM
     float out_wheel_torque[4]{};  // 输出扭矩 Nm
+
+    // ---- 2 个履带（索引 [0]=L, [1]=R）----
+    bool  track_online[2]{};
+    float current_track_rpm[2]{};  // 反馈：履带驱动轮 RPM
+    float target_track_rpm[2]{};   // 目标：履带驱动轮 RPM
+    float out_track_torque[2]{};   // 输出力矩 Nm
 };
 
 // 完整上下文
@@ -131,6 +140,7 @@ class engineer_chassis_t final
     // =============================================
     void _kinematics_solve();         // 麦轮逆运动学求解
     void _mecanum_control();          // 麦轮速度环 PID 控制
+    void _track_control();            // 履带速度环 PID 控制
     void _send_motor_command() const; // 发送所有电机指令
 
     // 运动学求解器（混合底盘：巡航用麦轮，越障时叠加履带）

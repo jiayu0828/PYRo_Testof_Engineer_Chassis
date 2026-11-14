@@ -16,6 +16,7 @@ can_drv_t *can3_drv = nullptr;
 
 extern "C" void chassis_app_init(void);
 extern "C" void chassis_remote_init(void);
+extern "C" void chassis_debug_init(void);
 
 extern "C"{
 void pyro_init_thread(void *argument){
@@ -66,6 +67,9 @@ void pyro_init_thread(void *argument){
 
     /*      遥控器通信任务（DR16 读遥控并下发命令）      */
     chassis_remote_init();
+
+    /*      速度环调试任务（JCOM 导出目标/当前转速与力矩）      */
+    chassis_debug_init();
 
     vTaskDelete(nullptr);
 }

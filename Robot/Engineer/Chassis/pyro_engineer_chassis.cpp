@@ -26,7 +26,7 @@ status_t engineer_chassis_t::_init()
     _ctx.pid   = _module_deps.pid_deps;
 
     // 2. 新建混合底盘运动学求解器（专家模式：4 个独立 K，支持非对称）
-    //因为腿部的原因，导致我的底盘本身是一个梯形，具体参数粗测了一遍，如果不行，再找图纸测一下把
+    //现在在机械的辅助下进行了相关的测量，感觉还是可以的
     _kinematics = new hybrid_kin_t(TRACK_SPACING, K_FL, K_FR, K_BL, K_BR);
 
     return PYRO_OK;
@@ -53,6 +53,18 @@ void engineer_chassis_t::_update_feedback()
     // 右侧两轮反馈取反：统一到逻辑正方向，使 PID 两侧方向一致
     _ctx.data.current_wheel_rpm[1] = -_ctx.data.current_wheel_rpm[1];
     _ctx.data.current_wheel_rpm[3] = -_ctx.data.current_wheel_rpm[3];
+    // ---- 履带电机（达妙 4310）----
+    // get_current_rotate() 已是输出轴 rad/s，直接转驱动轮 RPM，不除减速比
+    for (int i = 0; i < 2; i++)
+    {
+        if (!_ctx.motor.track[i]) continue;
+        _ctx.motor.track[i]->update_feedback();
+        _ctx.data.current_track_rpm[i] =
+            radps_to_rpm(_ctx.motor.track[i]->get_current_rotate());
+        _ctx.data.track_online[i] = _ctx.motor.track[i]->is_online();
+    }
+    //履带右侧电机进行取反
+    _ctx.data.current_track_rpm[1] = -_ctx.data.current_track_rpm[1];
 }
 
 // =========================================================
@@ -60,17 +72,21 @@ void engineer_chassis_t::_update_feedback()
 // =========================================================
 void engineer_chassis_t::_kinematics_solve()
 {
-    // 巡航模式 track_en=false：履带输出 0，仅求解 4 个麦轮。
-    // 未来越障启用履带时，把该开关改为由命令/状态驱动即可，求解器无需更换。
+    // 测试阶段 track_en=true：履带与麦轮一起解算（平地悬空可空转验证电机与速度环）。
+    // 验证 OK 后，把该开关改为由命令/状态驱动，恢复越障时才启用。
     const auto wheel_speeds = _kinematics->solve(
         _ctx.cmd->chassis.vx, _ctx.cmd->chassis.vy, _ctx.cmd->chassis.wz,
-        false);
+        true);
 
     // 线速度 m/s -> 轮轴 RPM（逻辑正方向，不在此取反）
     _ctx.data.target_wheel_rpm[0] = mps_to_rpm(wheel_speeds.mec_fl, WHEEL_RADIUS);
     _ctx.data.target_wheel_rpm[1] = mps_to_rpm(wheel_speeds.mec_fr, WHEEL_RADIUS);
     _ctx.data.target_wheel_rpm[2] = mps_to_rpm(wheel_speeds.mec_bl, WHEEL_RADIUS);
     _ctx.data.target_wheel_rpm[3] = mps_to_rpm(wheel_speeds.mec_br, WHEEL_RADIUS);
+
+    // 履带目标：线速度 m/s -> 驱动轮 RPM
+    _ctx.data.target_track_rpm[0] = mps_to_rpm(wheel_speeds.track_l, TRACK_WHEEL_RADIUS);
+    _ctx.data.target_track_rpm[1] = mps_to_rpm(wheel_speeds.track_r, TRACK_WHEEL_RADIUS);
 }
 
 // =========================================================
@@ -86,6 +102,19 @@ void engineer_chassis_t::_mecanum_control()
 }
 
 // =========================================================
+// _track_control()：履带速度环 PID
+// =========================================================
+void engineer_chassis_t::_track_control()
+{
+    for (int i = 0; i < 2; i++)
+    {
+        if (!_ctx.pid.track_pid[i]) continue;
+        _ctx.data.out_track_torque[i] = _ctx.pid.track_pid[i]->calculate(
+            _ctx.data.target_track_rpm[i], _ctx.data.current_track_rpm[i]);
+    }
+}
+
+// =========================================================
 // _send_motor_command()：发送所有电机指令
 // =========================================================
 void engineer_chassis_t::_send_motor_command() const
@@ -95,6 +124,10 @@ void engineer_chassis_t::_send_motor_command() const
     _ctx.motor.mecanum[1]->send_torque(-_ctx.data.out_wheel_torque[1]);
     _ctx.motor.mecanum[2]->send_torque(_ctx.data.out_wheel_torque[2]);
     _ctx.motor.mecanum[3]->send_torque(-_ctx.data.out_wheel_torque[3]);
+
+    _ctx.motor.track[0]->send_torque(_ctx.data.out_track_torque[0]);
+    _ctx.motor.track[1]->send_torque(-_ctx.data.out_track_torque[1]);
+    // 履带（符号先按逻辑正向，方向不对上车再在此处取反）
 }
 
 // =========================================================
