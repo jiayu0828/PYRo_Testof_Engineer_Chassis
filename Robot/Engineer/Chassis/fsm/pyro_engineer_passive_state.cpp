@@ -11,12 +11,13 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     // 进入被动状态：禁用电机、清零数据、清空 PID
     for (auto *motor : owner->_ctx.motor.mecanum)
     {
-        motor->disable();
+        if (motor) motor->disable();
     }
     for (int i = 0; i < 4; i++)
     {
         owner->_ctx.data.target_wheel_rpm[i] = 0.0f;
         owner->_ctx.data.out_wheel_torque[i] = 0.0f;
+        owner->_mec_en_state[i] = false;
     }
     for (auto *pid : owner->_ctx.pid.mecanum_pid)
     {
@@ -32,8 +33,31 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     {
         owner->_ctx.data.target_track_rpm[i] = 0.0f;
         owner->_ctx.data.out_track_torque[i] = 0.0f;
+        owner->_track_en_state[i] = false;
     }
     for (auto *pid : owner->_ctx.pid.track_pid)
+    {
+        if (pid) pid->clear();
+    }
+
+    // 腿去使能、数据清零、清 PID
+    for (auto *motor : owner->_ctx.motor.leg)
+    {
+        if (motor) motor->disable();
+    }
+    for (int i = 0; i < 2; i++)
+    {
+        owner->_ctx.data.target_leg_theta[i] = 0.0f;
+        owner->_ctx.data.target_leg_radps[i] = 0.0f;
+        owner->_ctx.data.out_leg_torque[i]   = 0.0f;
+        owner->_leg_target_smooth[i]         = 0.0f;
+        owner->_leg_en_state[i] = false;
+    }
+    for (auto *pid : owner->_ctx.pid.leg_pos_pid)
+    {
+        if (pid) pid->clear();
+    }
+    for (auto *pid : owner->_ctx.pid.leg_vel_pid)
     {
         if (pid) pid->clear();
     }
@@ -49,6 +73,7 @@ void engineer_chassis_t::state_passive_t::execute(owner *owner)
     for (int i = 0; i < 2; i++)
     {
         owner->_ctx.data.out_track_torque[i] = 0.0f;
+        owner->_ctx.data.out_leg_torque[i]   = 0.0f;
     }
     owner->_send_motor_command();
 }

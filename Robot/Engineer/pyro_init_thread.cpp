@@ -5,6 +5,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pyro_referee.h"
+#include "pyro_ins.h"
 
 namespace pyro{
 
@@ -62,13 +63,24 @@ void pyro_init_thread(void *argument){
     DR16_UART.enable_rx_dma();
 #endif
 
+    /*      IMU（BMI088）初始化，内部创建 INS 任务      */
+    ins_config_t ins_cfg;
+    ins_cfg.gx_offset = -0.000938494108f;
+    ins_cfg.gy_offset = -0.0022492914f;
+    ins_cfg.gz_offset = 0.000906182453f;
+    ins_cfg.g_norm = 9.80828953f;
+
+    ins_cfg.direct    = ins_config_t::imu_direct_t::DIRECT_4;
+    ins_cfg.calibrate = false;
+    ins_drv_t::get_instance()->init(ins_cfg);
+
     /*      底盘模块装配（电机/PID 依赖、模块启动）      */
     chassis_app_init();
 
     /*      遥控器通信任务（DR16 读遥控并下发命令）      */
     chassis_remote_init();
 
-    /*      速度环调试任务（JCOM 导出目标/当前转速与力矩）      */
+    /*      调试任务（JCOM 多通道导出履带/腿/IMU 数据）      */
     chassis_debug_init();
 
     vTaskDelete(nullptr);

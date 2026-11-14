@@ -38,6 +38,7 @@ target_sources(PYRo PRIVATE
 
         # --- Algorithm ---
         Algorithm/Kinematics/pyro_kin_hybrid.cpp
+        Algorithm/Kinematics/pyro_kin_leg.cpp
         Algorithm/Kinematics/pyro_kin_mec.cpp
         Algorithm/Kinematics/pyro_kin_rudder.cpp
         Algorithm/Kinematics/pyro_kin_wl.cpp

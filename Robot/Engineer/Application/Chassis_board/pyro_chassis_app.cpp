@@ -47,14 +47,14 @@ static void deps_init()
                       1.0f, 10.0f, 20.0f, 1, 0, 0, 0);
     }
 
-    /* ---------- 履带电机（达妙 4310，CAN2，ID 参考小坦 lift） ---------- */
+    /* ---------- 履带电机（达妙 4310，CAN2） ---------- */
     // 索引 [0]=L 左履带, [1]=R 右履带
     s_deps->motor_deps.track[0] =
-        new dm_motor_drv_t(0x11, 0x21, bsp_can::can2); 
+        new dm_motor_drv_t(0x11, 0x21, bsp_can::can2);
     s_deps->motor_deps.track[1] =
-        new dm_motor_drv_t(0x12, 0x22, bsp_can::can2); 
+        new dm_motor_drv_t(0x12, 0x22, bsp_can::can2);
 
-    // 达妙解析范围（参考小坦），并清零内部 kp/kd 以使用纯力矩模式
+    // 达妙解析范围，并清零内部 kp/kd 以使用纯力矩模式
     for (int i = 0; i < 2; i++)
     {
         auto *dm = static_cast<dm_motor_drv_t *>(s_deps->motor_deps.track[i]);
@@ -65,11 +65,41 @@ static void deps_init()
         dm->set_runtime_kd(0.0f);
     }
 
-    /* ---------- 履带速度环 PID（参数参考小坦 lift_vel_pid，max_out=27 匹配力矩范围） ---------- */
+    /* ---------- 履带速度环 PID（max_out=27 匹配力矩范围） ---------- */
     for (int i = 0; i < 2; i++)
     {
         s_deps->pid_deps.track_pid[i] =
             new pid_t(0.2f, 0.00f, 0.0f, 0.5f, 27.0f, pid_t::INTEGRAL_LIMIT);
+    }
+
+    /* ---------- 腿电机（达妙，CAN1） ---------- */
+    s_deps->motor_deps.leg[0] =
+        new dm_motor_drv_t(0x31, 0x41, bsp_can::can1);
+    s_deps->motor_deps.leg[1] =
+        new dm_motor_drv_t(0x32, 0x42, bsp_can::can1);
+
+    // 达妙解析范围，纯力矩模式（内部 kp/kd=0）
+    for (int i = 0; i < 2; i++)
+    {
+        auto *dm = static_cast<dm_motor_drv_t *>(s_deps->motor_deps.leg[i]);
+        dm->set_position_range(-PI, PI);
+        dm->set_rotate_range(-LEG_MAX_SPEED, LEG_MAX_SPEED);
+        dm->set_torque_range(-LEG_MAX_TORQUE, LEG_MAX_TORQUE);
+        dm->set_runtime_kp(0.0f);
+        dm->set_runtime_kd(0.0f);
+    }
+
+    /* ---------- 腿双环 PID（保守初值，上车再调） ---------- */
+    for (int i = 0; i < 2; i++)
+    {
+        // 外环位置环：角度误差 -> 目标角速度，限幅匹配电机速度
+        s_deps->pid_deps.leg_pos_pid[i] =
+            new pid_t(8.0f, 0.0f, 0.0f, LEG_MAX_SPEED, LEG_MAX_SPEED,
+                      pid_t::INTEGRAL_LIMIT);
+        // 内环速度环：速度误差 -> 力矩，限幅匹配力矩范围
+        s_deps->pid_deps.leg_vel_pid[i] =
+            new pid_t(1.0f, 0.5f, 0.0f, LEG_MAX_TORQUE, LEG_MAX_TORQUE,
+                      pid_t::INTEGRAL_LIMIT);
     }
 }
 
