@@ -7,6 +7,9 @@
 namespace pyro
 {
 
+// IMU 一阶低通系数：与小坦一致，每帧保留 15% 新采样、85% 历史值
+static constexpr float LEG_IMU_LPF_ALPHA = 0.15f;
+
 // =========================================================
 // 构造函数
 // =========================================================
@@ -166,11 +169,9 @@ void engineer_chassis_t::_mecanum_control()
 // =========================================================
 void engineer_chassis_t::_track_control()
 {
-    // 履带恒速：左拨杆 UP 给固定目标，否则目标 0（不与 vx 绑定）。
-    // 两条履带逻辑目标相同，物理发送时右履带取反
-    const float track_ref = _ctx.cmd->track_run ? TRACK_CONSTANT_RPM : 0.0f;
-    _ctx.data.target_track_rpm[0] = track_ref;
-    _ctx.data.target_track_rpm[1] = track_ref;
+    // 当前速度目标固定为 0，仅保留速度闭环。
+    _ctx.data.target_track_rpm[0] = 0.0f;
+    _ctx.data.target_track_rpm[1] = 0.0f;
 
     for (int i = 0; i < 2; i++)
     {
@@ -217,12 +218,21 @@ void engineer_chassis_t::_leg_feedback()
     // IMU 姿态：get_angles_n 返回度，pitch 转弧度并减固定安装角（车水平时读数为0）
     float yaw_deg = 0.0f, pitch_deg = 0.0f, roll_deg = 0.0f;
     ins_drv_t::get_instance()->get_angles_n(&yaw_deg, &pitch_deg, &roll_deg);
-    _ctx.data.imu_pitch = pitch_deg * PI / 180.0f - PITCH_OFFSET_RAD;
+    const float raw_pitch = pitch_deg * PI / 180.0f - PITCH_OFFSET_RAD;
 
-    // IMU 陀螺：get_gyro_n 返回 rad/s，只取 pitch 轴角速度（yaw/roll 丢弃）
-    float gyro_x = 0.0f, gyro_y = 0.0f, gyro_z = 0.0f;
-    ins_drv_t::get_instance()->get_gyro_n(&gyro_x, &gyro_y, &gyro_z);
-    _ctx.data.imu_pitch_radps = gyro_y;
+    // 一阶低通：首帧直接采用原始值，避免启动时从 0 缓慢爬升；
+    // 原始值和滤波值同时保留，控制只使用滤波值
+    if (!_imu_lpf_init)
+    {
+        _imu_pitch_lpf = raw_pitch;
+        _imu_lpf_init  = true;
+    }
+    else
+    {
+        _imu_pitch_lpf += LEG_IMU_LPF_ALPHA * (raw_pitch - _imu_pitch_lpf);
+    }
+    _ctx.data.imu_pitch_raw = raw_pitch;
+    _ctx.data.imu_pitch     = _imu_pitch_lpf;
 
     for (int i = 0; i < 2; i++)
     {
@@ -232,6 +242,7 @@ void engineer_chassis_t::_leg_feedback()
 
         // 多圈 unwrap：首帧直接初始化，之后按带符号最短角增量累积
         const float raw = _ctx.motor.leg[i]->get_current_position();
+        _ctx.data.leg_raw_position[i] = raw;
         if (!_leg_fb_init[i])
         {
             _last_leg_raw[i] = raw;
@@ -266,34 +277,31 @@ void engineer_chassis_t::_leg_feedback()
         _ctx.data.leg_alpha[i] = alpha;
 
         const auto pose = _leg_kinematics->forward(alpha);
+        _ctx.data.leg_pose_valid[i] = pose.valid;
         if (pose.valid)
         {
-            _ctx.data.leg_phi[i] = pose.phi;
-            _ctx.data.leg_fx[i]  = pose.f_x;
-            _ctx.data.leg_fy[i]  = pose.f_y;
-            _ctx.data.leg_wx[i]  = pose.w_x;
-            _ctx.data.leg_wy[i]  = pose.w_y;
+            _ctx.data.leg_wx[i] = pose.w_x;
+            _ctx.data.leg_wy[i] = pose.w_y;
+        }
+        else
+        {
+            // 禁止无效姿态继续沿用上一帧轮心，重力有效性标志会同步置假
+            _ctx.data.leg_wx[i] = 0.0f;
+            _ctx.data.leg_wy[i] = 0.0f;
         }
     }
 }
 
 // =========================================================
 // _leg_control()：腿控制
-// 右拨杆 UP 使能腿；履带启动（左拨杆 UP）跑 VMC 自动 pitch 平衡，
+// 右拨杆 UP 使能腿；履带启动（左拨杆 UP）输出纯重力前馈，
 // 履带停止时跑手动双环（位置环 -> 速度环）；未使能则清零、0 力矩松开
 // =========================================================
 void engineer_chassis_t::_leg_control()
 {
-    // 任务空间扶正力（VMC 用，两腿共享，循环外算一次）：
-    // pitch 偏差的弹簧项 + 俯仰角速度的阻尼项，再限幅
-    const float pitch     = _ctx.data.imu_pitch;
-    const float pitch_err = LEG_TARGET_PITCH - pitch;
-    float f_pitch = LEG_PITCH_KP * pitch_err -
-                    LEG_PITCH_KD * _ctx.data.imu_pitch_radps;
-    f_pitch = LEG_PITCH_SIGN *
-              fp32_constrain(f_pitch, -LEG_PITCH_F_MAX, LEG_PITCH_F_MAX);
+    const float pitch = _ctx.data.imu_pitch;
 
-    // 履带启动（左拨杆 UP）-> VMC 平衡；否则手动双环
+    // 履带启动（左拨杆 UP）-> 纯重力前馈；否则手动双环
     const bool vmc_mode = _ctx.cmd->track_run;
 
     for (int i = 0; i < 2; i++)
@@ -305,16 +313,26 @@ void engineer_chassis_t::_leg_control()
         {
             _ctx.data.target_leg_theta[i] = 0.0f;
             _ctx.data.target_leg_radps[i] = 0.0f;
-            _ctx.data.out_leg_torque[i]   = 0.0f;
+            _ctx.data.out_leg_torque[i]         = 0.0f;
             _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-            _leg_target_smooth[i]         = 0.0f;
+            _ctx.data.leg_j_vertical[i]         = 0.0f;
+            _ctx.data.leg_support_arm[i]        = 0.0f;
+            _ctx.data.leg_n_each[i]             = 0.0f;
+            _ctx.data.leg_gravity_valid[i]      = false;
+            _leg_target_smooth[i]               = 0.0f;
             if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
             if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
             continue;
         }
 
         // 使能但尚未校准：不输出（等校准脉冲）
-        if (!_ctx.data.leg_calibrated[i]) continue;
+        if (!_ctx.data.leg_calibrated[i])
+        {
+            _ctx.data.out_leg_torque[i]         = 0.0f;
+            _ctx.data.out_leg_gravity_torque[i] = 0.0f;
+            _ctx.data.leg_gravity_valid[i]      = false;
+            continue;
+        }
 
         // 目标角一阶插值平滑：每帧向摇杆命令靠近固定比例，使动作柔和、
         // 摇杆回中时缓慢收回（两种模式都更新，保证手动/VMC 切换无突变）
@@ -334,32 +352,42 @@ void engineer_chassis_t::_leg_control()
         const float k =
             static_cast<float>(LEG_LOGIC_SIGN[i] * LEG_MOTOR_DIR[i]) /
             LEG_EXTERNAL_RATIO;
-        const float jwy = k * jw[1];
         const float cp = cosf(pitch), sp = sinf(pitch);
-        // j_dyn：车体系竖直向上的力 -> 逻辑电机力矩的映射。
-        // forward/雅可比输出均为车体系（固连车体），车体竖直就是 +y，故直接取 jwy，
-        // 无需再用 pitch 旋转（pitch=0 时即车体系 +y 方向雅可比）
-        const float j_dyn = jwy;
+        // 世界竖直向上的支撑力在车体系中为 (sp, cp)，因此力到逻辑电机
+        // 力矩的映射必须同时使用 Jx、Jy；pitch=0 时退化为原来的 jwy
+        const float j_vertical = k * (jw[0] * sp + jw[1] * cp);
+        _ctx.data.leg_j_vertical[i] = j_vertical;
 
-        // 静态法向支撑力（一阶段整车重力补偿）：对髋关节 B 的车体系力矩平衡。
-        // 重力车体系分量=(Mg sp,-Mg cp)，对 B 力矩 = -Mg(COG_DX cp + COG_DY sp)；
-        // 支撑力沿车体竖直 +y，力臂为 W 相对 B 的车体系纵向距离 px。
+        // 一阶段整车重力补偿：以前轮轮心 O 为支点，对整车取矩。
+        // 轮心 W 相对 O 的矢量 = 髋关节 B 相对 O + W 相对 B（四杆实时计算）。
+        // 世界竖直后轮总支撑力 N 对 O 的力臂 = x_w*cp - y_w*sp；
+        // 重力对 O 的力矩幅值 = Mg*(x_g*cp + y_g*sp)。
+        const float x_w = LEG_O_HIP_X + _ctx.data.leg_wx[i] - LEG_B_X;
+        const float y_w = LEG_O_HIP_Y + _ctx.data.leg_wy[i] - LEG_B_Y;
+        const float support_arm = x_w * cp - y_w * sp;
+        const float gravity_moment =
+            LEG_VEH_MASS * LEG_GRAVITY *
+            (LEG_O_COG_X * cp + LEG_O_COG_Y * sp);
+        const bool support_valid = fabsf(support_arm) > 1e-4f;
         float n_i = 0.0f;
-        if (LEG_VMC_GRAVITY_EN && _leg_kinematics)
+        if (LEG_VMC_GRAVITY_EN && support_valid)
         {
-            const float px = _ctx.data.leg_wx[i] - LEG_B_X;
-            const float arm_g = LEG_COG_DX * cp + LEG_COG_DY * sp;
-            if (fabsf(px) > 1e-4f)
-            {
-                n_i = 0.5f * LEG_VEH_MASS * LEG_GRAVITY * arm_g / px;
-            }
+            // 左右腿均匀分担后轮总支撑力
+            n_i = 0.5f * gravity_moment / support_arm;
         }
-        _ctx.data.out_leg_gravity_torque[i] = j_dyn * n_i;
+        _ctx.data.leg_support_arm[i] = support_arm;
+        _ctx.data.leg_n_each[i] = n_i;
+        _ctx.data.leg_gravity_valid[i] =
+            _ctx.data.leg_pose_valid[i] && support_valid &&
+            (fabsf(j_vertical) > 1e-6f);
+        _ctx.data.out_leg_gravity_torque[i] = j_vertical * n_i;
 
         if (vmc_mode)
         {
-            // VMC 平衡：静态承重 + 动态扶正，直接经雅可比发力矩（绕过双环）
-            _ctx.data.out_leg_torque[i] = j_dyn * (n_i + f_pitch);
+            // 当前只测试重力前馈，不叠加俯仰扶正；最终限制在电机允许范围内
+            _ctx.data.out_leg_torque[i] = fp32_constrain(
+                _ctx.data.out_leg_gravity_torque[i],
+                -LEG_MAX_TORQUE, LEG_MAX_TORQUE);
         }
         else
         {

@@ -113,6 +113,7 @@ struct engineer_data_ctx_t
 
     // ---- 2 条腿（索引 [0]=L, [1]=R）----
     bool  leg_online[2]{};
+    float leg_raw_position[2]{};   // 电机原始单圈角（rad）
     float leg_theta_unwrap[2]{};   // 电机输出轴多圈角（连续，rad）
     float leg_theta_cal[2]{};      // 校准时的电机多圈角基准
     float current_leg_theta[2]{};  // 相对电机角（校准点为 0，rad）
@@ -120,16 +121,21 @@ struct engineer_data_ctx_t
     float target_leg_theta[2]{};   // 目标相对电机角（手动模式来自右摇杆）
     float target_leg_radps[2]{};   // 位置环输出的目标角速度
     float out_leg_torque[2]{};     // 最终输出力矩 Nm
-    float out_leg_gravity_torque[2]{}; // 整车重力补偿前馈力矩 Nm（当前开关关闭，为0）
+    float out_leg_gravity_torque[2]{}; // 整车重力补偿前馈力矩 Nm
     bool  leg_calibrated[2]{};     // 是否已校准
-    // 正运动学结果
+
+    // 重力补偿中间量：同时供 JustFloat 和 Live Watch 核查
     float leg_alpha[2]{};          // 当前曲柄角 rad
-    float leg_phi[2]{};            // 当前小腿角 rad
-    float leg_fx[2]{}, leg_fy[2]{};  // 末端 F
-    float leg_wx[2]{}, leg_wy[2]{};  // 轮心 W
-    // IMU
-    float imu_pitch{};             // 车身俯仰角 rad
-    float imu_pitch_radps{};       // 俯仰角速度 rad/s
+    bool  leg_pose_valid[2]{};     // 四杆正运动学是否有效
+    bool  leg_gravity_valid[2]{};  // 位姿、雅可比和支撑力臂是否有效
+    float leg_wx[2]{}, leg_wy[2]{}; // 轮心 W（相对四杆局部原点）
+    float leg_j_vertical[2]{};     // 世界竖直力到逻辑电机角的雅可比
+    float leg_support_arm[2]{};    // 后轮支撑力对前轴 O 的力臂 m
+    float leg_n_each[2]{};         // 单腿分配的后轮竖直支撑力 N
+
+    // IMU：同时保留原始值和滤波值，控制只使用滤波值
+    float imu_pitch_raw{};
+    float imu_pitch{};
 };
 
 // 完整上下文
@@ -200,6 +206,10 @@ class engineer_chassis_t final
     // 腿反馈 unwrap 内部状态
     float _last_leg_raw[2]{};  // 上一帧电机原始角
     bool  _leg_fb_init[2]{};   // 首帧初始化标志
+
+    // IMU pitch 一阶低通状态
+    float _imu_pitch_lpf{};
+    bool  _imu_lpf_init{false};
 
     // 手动模式目标角平滑（一阶插值），避免摇杆突变/回中时腿快速冲击
     float _leg_target_smooth[2]{};

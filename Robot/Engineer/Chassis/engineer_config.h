@@ -73,27 +73,18 @@ constexpr float LEG_TARGET_LERP = 0.05f;
 constexpr int LEG_LOGIC_SIGN[2] = {1, -1};
 
 // =========================================================
-// 整车重力补偿（VMC 腿撑地承重，对髋关节 B 取矩的杠杆平衡）
-// 仅在腿撑地、承担车重时使能；悬空时必须关闭，否则会产生错误大力矩
+// 整车重力补偿（前轴 O 取矩的两支撑杠杆模型）
+// O=前轮轮心；车体系 x 向前、y 向上；仅在后轮撑地且模型适用时使能
 // =========================================================
-constexpr bool LEG_VMC_GRAVITY_EN = true;   // 使能开关
+constexpr bool LEG_VMC_GRAVITY_EN = true;     // 使能开关
 constexpr float LEG_GRAVITY       = 9.80665f; // 重力加速度 m/s²
-constexpr float LEG_VEH_MASS      = 20.0f;   // 整车总质量 kg（拟定，可称重修正）
-// 整车质心相对髋关节 B 的车体系位置（m，拟定值，待 SolidWorks 整车质心修正）
-constexpr float LEG_COG_DX = 0.25f; // 纵向（前后）距离：质心在 B 前方
-constexpr float LEG_COG_DY = 0.20f; // 质心在 B 上方的高度
-
-// =========================================================
-// VMC Pitch 姿态平衡（履带启动、左拨杆 UP 后，腿自动扶正整车）
-// =========================================================
-constexpr float LEG_TARGET_PITCH = 0.0f;   // 目标 pitch（rad），先保持水平
-constexpr float LEG_PITCH_KP     = 200.0f;  // 弹簧：pitch 每偏 1 rad 产生的虚拟力 N
-constexpr float LEG_PITCH_KD     = 5.0f;   // 阻尼：每个俯仰角速度产生的虚拟力 N/(rad/s)
-constexpr float LEG_PITCH_F_MAX  = 150.0f; // 虚拟扶正力限幅 N，防止异常大值
-// 扶正方向开关：闭环方向正确取 +1；若越扶越歪（IMU 安装/传动方向导致 pitch 反向）取 -1
-// 实车确认 SIGN=-1 时手感反了，翻转为 +1 纠正整体闭环方向
-constexpr float LEG_PITCH_SIGN   = 1.0f;
-
+constexpr float LEG_VEH_MASS      = 20.0f;    // 整车总质量 kg（当前沿用 20）
+// 髋关节 B 相对前轴 O：直线距离约 0.4 m，第一阶段忽略高度差
+constexpr float LEG_O_HIP_X = -0.40f;
+constexpr float LEG_O_HIP_Y = 0.0f;
+// 质心相对前轴 O：四轮几何中心粗估，后续按实车受力修正
+constexpr float LEG_O_COG_X = -0.225f;
+constexpr float LEG_O_COG_Y = 0.076f;
 
 // IMU 固定安装俯仰角补偿（rad）：车水平时 IMU 静止读数的恒定偏置，应用层减去
 constexpr float PITCH_OFFSET_RAD = -0.065f;
