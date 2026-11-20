@@ -231,21 +231,36 @@ void engineer_chassis_t::_mecanum_control()
 
 // =========================================================
 // _track_control()：履带速度环 PID
-// 当前履带目标固定为 0，仅保留速度闭环；左拨杆已复用为腿部 VMC 模式。
-// 若后续恢复履带恒速/越障控制，应在此函数内重新生成 target_track_rpm。
+// 右拨杆 UP 使能电机；左拨杆 UP 且电机使能时按固定 RPM 恒速运行。
 // =========================================================
 void engineer_chassis_t::_track_control()
 {
-    _ctx.data.target_track_rpm[0] = 0.0f;
-    _ctx.data.target_track_rpm[1] = 0.0f;
+    const bool track_run_active = _ctx.cmd->track_en && _ctx.cmd->track_run;
 
     for (int i = 0; i < 2; i++)
     {
-        if (!_ctx.pid.track_pid[i]) continue;
+        // 未使能时不生成目标/力矩，并清掉速度环积分，避免重新使能瞬间冲一下
+        if (!_ctx.cmd->track_en)
+        {
+            _ctx.data.target_track_rpm[i] = 0.0f;
+            _ctx.data.out_track_torque[i] = 0.0f;
+            if (_ctx.pid.track_pid[i]) _ctx.pid.track_pid[i]->clear();
+            continue;
+        }
 
-        _ctx.data.out_track_torque[i] = _ctx.pid.track_pid[i]->calculate(
-            _ctx.data.target_track_rpm[i],
-            _ctx.data.current_track_rpm[i]);
+        _ctx.data.target_track_rpm[i] =
+            track_run_active ? TRACK_CONSTANT_RPM : 0.0f;
+
+        if (_ctx.pid.track_pid[i])
+        {
+            _ctx.data.out_track_torque[i] = _ctx.pid.track_pid[i]->calculate(
+                _ctx.data.target_track_rpm[i],
+                _ctx.data.current_track_rpm[i]);
+        }
+        else
+        {
+            _ctx.data.out_track_torque[i] = 0.0f;
+        }
     }
 }
 
@@ -272,6 +287,10 @@ void engineer_chassis_t::_calibrate_leg()
         if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
         if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
     }
+
+    // 重新校准时同步清空姿态环，避免旧积分带入校准后的第一次 VMC
+    if (_ctx.pid.pitch_pid) _ctx.pid.pitch_pid->clear();
+    if (_ctx.pid.roll_pid)  _ctx.pid.roll_pid->clear();
 }
 
 // =========================================================
@@ -285,18 +304,20 @@ void engineer_chassis_t::_leg_feedback()
         _calibrate_leg();
     }
 
-    // IMU 姿态：get_angles_n 返回度，pitch 转弧度并减固定安装角
-    float yaw_deg = 0.0f;
-    float pitch_deg = 0.0f;
-    float roll_deg = 0.0f;
-    ins_drv_t::get_instance()->get_angles_n(&yaw_deg, &pitch_deg, &roll_deg);
+    // IMU 姿态：直接读取弧度，并减去固定安装角
+    float yaw_rad   = 0.0f;
+    float pitch_rad = 0.0f;
+    float roll_rad  = 0.0f;
+    ins_drv_t::get_instance()->get_rads_n(&yaw_rad, &pitch_rad, &roll_rad);
 
-    const float raw_pitch = pitch_deg * PI / 180.0f - PITCH_OFFSET_RAD;
+    const float raw_pitch = pitch_rad - PITCH_OFFSET_RAD;
+    const float raw_roll  = roll_rad - ROLL_OFFSET_RAD;
 
     // 一阶低通：首帧直接采用原始值，避免启动时从 0 缓慢爬升
     if (!_imu_lpf_init)
     {
         _imu_pitch_lpf = raw_pitch;
+        _imu_roll_lpf  = raw_roll;
         _imu_lpf_init  = true;
     }
     else
@@ -304,10 +325,15 @@ void engineer_chassis_t::_leg_feedback()
         _imu_pitch_lpf =
             LEG_IMU_LPF_ALPHA * raw_pitch +
             (1.0f - LEG_IMU_LPF_ALPHA) * _imu_pitch_lpf;
+        _imu_roll_lpf =
+            LEG_IMU_LPF_ALPHA * raw_roll +
+            (1.0f - LEG_IMU_LPF_ALPHA) * _imu_roll_lpf;
     }
 
     _ctx.data.imu_pitch_raw = raw_pitch;
     _ctx.data.imu_pitch     = _imu_pitch_lpf;
+    _ctx.data.imu_roll_raw  = raw_roll;
+    _ctx.data.imu_roll      = _imu_roll_lpf;
 
     for (int i = 0; i < 2; i++)
     {
@@ -353,13 +379,41 @@ void engineer_chassis_t::_leg_feedback()
 
 // =========================================================
 // _leg_control()：腿控制
-// 1. 左拨杆 UP：小坦巡航 VMC 重力补偿 + 窗外安全墙 + 全模式阻尼。
-// 2. 左拨杆 MID/DOWN：当前角保持型手动双环；摇杆下推时做无扰增量映射。
+// 1. 左拨杆 UP：履带恒速联动，腿部执行重力 VMC + Pitch/Roll 姿态补偿 + 阻尼/软墙。
+// 2. 左拨杆 MID/DOWN：履带停止，腿部为当前角保持型手动双环；摇杆下推时做无扰映射。
 // =========================================================
 void engineer_chassis_t::_leg_control()
 {
     const float pitch    = _ctx.data.imu_pitch;
-    const bool  vmc_mode = _ctx.cmd->leg_vmc_mode;
+    const float roll     = _ctx.data.imu_roll;
+    const bool  vmc_mode = _ctx.cmd->track_run;
+
+    // Pitch/Roll PID 输出的是整机任务空间虚拟力，必须在两腿循环外只计算一次。
+    const bool legs_ready =
+        _ctx.data.leg_calibrated[0] && _ctx.data.leg_calibrated[1];
+    const bool attitude_active =
+        LEG_ATTITUDE_PID_EN && vmc_mode && _ctx.cmd->leg.en && legs_ready &&
+        _ctx.pid.pitch_pid != nullptr && _ctx.pid.roll_pid != nullptr;
+
+    float f_pitch = 0.0f;
+    float f_roll  = 0.0f;
+
+    if (attitude_active)
+    {
+        f_pitch = LEG_PITCH_FORCE_SIGN *
+                  _ctx.pid.pitch_pid->calculate(LEG_TARGET_PITCH_RAD, pitch);
+        f_roll  = LEG_ROLL_FORCE_SIGN *
+                  _ctx.pid.roll_pid->calculate(LEG_TARGET_ROLL_RAD, roll);
+    }
+    else
+    {
+        // 手动/失能/未校准/关闭补偿时清空积分和滤波器，避免再次进入瞬间阶跃
+        if (_ctx.pid.pitch_pid) _ctx.pid.pitch_pid->clear();
+        if (_ctx.pid.roll_pid)  _ctx.pid.roll_pid->clear();
+    }
+
+    _ctx.data.att_force_pitch = f_pitch;
+    _ctx.data.att_force_roll  = f_roll;
 
     for (int i = 0; i < 2; i++)
     {
@@ -374,6 +428,7 @@ void engineer_chassis_t::_leg_control()
             _ctx.data.leg_tau_damping[i]        = 0.0f;
             _ctx.data.leg_ff_scale[i]           = 0.0f;
             _ctx.data.leg_tau_manual_pid[i]     = 0.0f;
+            _ctx.data.leg_tau_attitude[i]       = 0.0f;
             _ctx.data.leg_control_mode[i]       = 0.0f;
 
             _leg_target_smooth[i]      = 0.0f;
@@ -392,6 +447,7 @@ void engineer_chassis_t::_leg_control()
             _ctx.data.out_leg_torque[i]         = 0.0f;
             _ctx.data.out_leg_gravity_torque[i] = 0.0f;
             _ctx.data.leg_gravity_valid[i]      = false;
+            _ctx.data.leg_tau_attitude[i]       = 0.0f;
             _ctx.data.leg_control_mode[i]       = 0.0f;
             _leg_last_logic_torque[i]           = 0.0f;
             continue;
@@ -456,10 +512,22 @@ void engineer_chassis_t::_leg_control()
                              LEG_POLY_GRAVITY_TAU_MAX)
             : 0.0f;
 
+        // Pitch/Roll 虚拟力 -> 小坦 theta 帧力矩 -> 本车 q 逻辑帧力矩。
+        // Roll 左右腿反号，与小坦 _leg_vmc() 保持一致；之后共用输出方向适配。
+        float attitude_tau_q = 0.0f;
+        if (attitude_active)
+        {
+            const float roll_force_i = (i == 0) ? f_roll : -f_roll;
+            const float tau_attitude_xt =
+                vmc.j_dynamic * (f_pitch + roll_force_i);
+            attitude_tau_q = LEG_POLY_OUTPUT_SIGN * tau_attitude_xt;
+        }
+
         // VMC 诊断量
         _ctx.data.leg_alpha[i]                = theta_eval;
         _ctx.data.leg_j_dynamic[i]            = vmc.j_dynamic;
         _ctx.data.leg_tau_wall[i]             = vmc_wall_tau;
+        _ctx.data.leg_tau_attitude[i]         = attitude_tau_q;
         _ctx.data.leg_ff_scale[i]             = 1.0f;
         _ctx.data.out_leg_gravity_torque[i]   = gravity_tau;
         _ctx.data.leg_gravity_valid[i]        = gravity_enable;
@@ -477,7 +545,7 @@ void engineer_chassis_t::_leg_control()
             _ctx.data.leg_tau_manual_pid[i] = 0.0f;
             _ctx.data.leg_control_mode[i]   = 2.0f;
 
-            raw_torque = gravity_tau + vmc_wall_tau;
+            raw_torque = gravity_tau + vmc_wall_tau + attitude_tau_q;
         }
         else
         {

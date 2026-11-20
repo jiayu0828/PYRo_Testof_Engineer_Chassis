@@ -7,8 +7,9 @@
  * 拨杆分工：
  *   右拨杆 DOWN：麦轮/履带/腿全部失能；MID：4 个麦轮使能；
  *             UP：麦轮、履带和腿使能，进入瞬间校准腿部零点一次。
- *   左拨杆 UP：腿部巡航 VMC 重力补偿模式；MID/DOWN：腿部手动保持。
- *   当前履带速度环目标固定为 0，右拨杆 UP 仅负责履带电机使能。
+ *   左拨杆 UP：履带按固定 RPM 恒速旋转，同时腿部进入重力 VMC + Pitch/Roll 补偿；
+ *             MID/DOWN：履带目标 0，腿部为手动保持。
+ *   右拨杆 UP 仍负责履带/腿电机使能；右拨杆非 UP 时即使左拨杆 UP 也不会输出履带力矩。
  * 后续若改为板间通信/自动任务，只需替换本层，模块内部无需改动。
  */
 extern "C" {
@@ -62,8 +63,8 @@ static void rc_to_cmd()
     s_cmd.leg.calibrate = (s_last_right_sw != sw_pos_t::UP && right_up);
     s_last_right_sw     = right_pos;
 
-    // 左拨杆：UP 进入腿部巡航 VMC；MID/DOWN 为腿部手动保持
-    s_cmd.leg_vmc_mode = (left_pos == sw_pos_t::UP);
+    // 左拨杆：UP 同时启动履带恒速和腿部姿态 VMC；MID/DOWN 履带停止、腿手动
+    s_cmd.track_run = (left_pos == sw_pos_t::UP);
 
     // 腿手动行程指令（右摇杆 ry，归一化后换算到 LEG_MANUAL_MIN 量程），两腿同步。
     // 底盘在左拨杆进入 MID/DOWN 的瞬间先把保持目标同步到当前腿角；摇杆下推时

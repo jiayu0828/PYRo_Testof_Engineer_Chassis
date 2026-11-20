@@ -101,6 +101,25 @@ static void deps_init()
             new pid_t(1.0f, 0.5f, 0.0f, LEG_MAX_TORQUE, LEG_MAX_TORQUE,
                       pid_t::INTEGRAL_LIMIT);
     }
+
+    /* ---------- 腿部 VMC 姿态力 PID（输出任务空间虚拟力 N，对照小坦参数） ---------- */
+    s_deps->pid_deps.pitch_pid = new pid_t(
+        LEG_PITCH_KP, LEG_ATTITUDE_KI, LEG_ATTITUDE_KD,
+        LEG_ATTITUDE_I_LIMIT, LEG_ATTITUDE_MAX_FORCE,
+        LEG_ATT_OUTPUT_CUTOFF_HZ, LEG_ATT_OUTPUT_LPF_ORDER,
+        LEG_ATT_DERIV_CUTOFF_HZ, LEG_ATT_DERIV_LPF_ORDER,
+        LEG_ATT_OLS_ORDER,
+        pid_t::INTEGRAL_LIMIT | pid_t::OUTPUT_FILTER |
+            pid_t::DERIVATIVE_FILTER | pid_t::DERIVATIVE_ON_MEASUREMENT);
+
+    s_deps->pid_deps.roll_pid = new pid_t(
+        LEG_ROLL_KP, LEG_ATTITUDE_KI, LEG_ATTITUDE_KD,
+        LEG_ATTITUDE_I_LIMIT, LEG_ATTITUDE_MAX_FORCE,
+        LEG_ATT_OUTPUT_CUTOFF_HZ, LEG_ATT_OUTPUT_LPF_ORDER,
+        LEG_ATT_DERIV_CUTOFF_HZ, LEG_ATT_DERIV_LPF_ORDER,
+        LEG_ATT_OLS_ORDER,
+        pid_t::INTEGRAL_LIMIT | pid_t::OUTPUT_FILTER |
+            pid_t::DERIVATIVE_FILTER | pid_t::DERIVATIVE_ON_MEASUREMENT);
 }
 
 /* ====================== 对外初始化入口 ====================== */

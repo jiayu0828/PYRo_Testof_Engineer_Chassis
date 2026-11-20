@@ -47,9 +47,9 @@ struct engineer_cmd_t final : public cmd_base_t
     bool mecanum_en;   // 麦轮使能（右拨杆 MID/UP）
     bool track_en;     // 履带电机使能（右拨杆 UP）
 
-    // 左拨杆模式：UP=腿部小坦巡航 VMC；MID/DOWN=腿部手动保持。
-    // 当前履带速度环目标固定为 0，该开关不再表示履带恒速。
-    bool leg_vmc_mode;
+    // 左拨杆 UP：履带固定转速运行，同时腿部进入“重力 VMC + Pitch/Roll 补偿”；
+    // 左拨杆 MID/DOWN：履带目标 0，腿部为手动保持模式。
+    bool track_run;
 
     engineer_cmd_t()
     {
@@ -62,7 +62,7 @@ struct engineer_cmd_t final : public cmd_base_t
         leg.target_theta = 0.0f;
         mecanum_en       = false;
         track_en         = false;
-        leg_vmc_mode     = false;
+        track_run        = false;
     }
 };
 
@@ -86,6 +86,8 @@ struct engineer_deps_t
         pid_t *track_pid[2]{nullptr};   // 履带速度环 PID
         pid_t *leg_pos_pid[2]{nullptr}; // 腿位置环 PID
         pid_t *leg_vel_pid[2]{nullptr}; // 腿速度环 PID
+        pid_t *pitch_pid{nullptr};      // 腿部 VMC 的 Pitch 姿态力 PID
+        pid_t *roll_pid{nullptr};       // 腿部 VMC 的 Roll 姿态力 PID
     };
 
     motor_deps_t motor_deps{};
@@ -130,11 +132,16 @@ struct engineer_data_ctx_t
     float leg_tau_damping[2]{};     // q 空间主动阻尼力矩 N·m
     float leg_ff_scale[2]{};        // 重力前馈缩放系数
     float leg_tau_manual_pid[2]{};  // 手动双环 PID 输出力矩 N·m
-    float leg_control_mode[2]{};    // 0=失能，1=手动保持，2=巡航 VMC
+    float leg_tau_attitude[2]{};    // Pitch/Roll 姿态 PID 映射后的 q 帧力矩 N·m
+    float leg_control_mode[2]{};    // 0=失能，1=手动保持，2=履带+姿态 VMC
+    float att_force_pitch{};        // Pitch PID 输出的任务空间虚拟力 N
+    float att_force_roll{};         // Roll PID 输出的左右差动力 N
 
     // ---- IMU：原始值和滤波值同时保留，控制只使用滤波值 ----
     float imu_pitch_raw{};
     float imu_pitch{};
+    float imu_roll_raw{};
+    float imu_roll{};
 };
 
 // 完整上下文
@@ -204,8 +211,8 @@ class engineer_chassis_t final
     // =============================================
     void _kinematics_solve();         // 麦轮逆运动学求解
     void _mecanum_control();          // 麦轮速度环 PID
-    void _track_control();            // 履带速度环 PID（当前目标固定 0）
-    void _leg_control();              // 腿手动保持 / 巡航 VMC
+    void _track_control();            // 履带恒速/停止速度环 PID
+    void _leg_control();              // 腿手动保持 / 履带姿态 VMC
     void _send_motor_command() const; // 发送所有电机指令
 
     // 麦轮混合运动学求解器
@@ -218,6 +225,7 @@ class engineer_chassis_t final
     bool  _leg_fb_init[2]{};  // 首帧初始化标志
 
     float _imu_pitch_lpf{};    // IMU pitch 一阶低通状态
+    float _imu_roll_lpf{};     // IMU roll 一阶低通状态
     bool  _imu_lpf_init{false};
 
     float _leg_target_smooth[2]{};     // 手动模式平滑目标角

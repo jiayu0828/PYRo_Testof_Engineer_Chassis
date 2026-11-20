@@ -19,6 +19,10 @@ constexpr float K_BR = (WHEELBASE + TRACK_WIDTH_BACK) / 2.0f;  // 右后麦轮�
 
 constexpr float TRACK_SPACING = 0.45f; // 左右履带中心距离 m
 
+// 左拨杆 UP 且右拨杆 UP 使能履带时，左右履带的逻辑目标转速 RPM。
+// 左右镜像物理方向由反馈/发送层符号处理，因此这里两个逻辑目标同号。
+constexpr float TRACK_CONSTANT_RPM = 100.0f;
+
 // =========================================================
 // 2. 遥控速度限制
 // =========================================================
@@ -148,8 +152,38 @@ constexpr float LEG_XT_YB_COEF[LEG_XT_YB_DEGREE + 1] = {
     -0.0056f, 0.0311f, -0.0793f, 0.1957f, 0.0745f};
 
 // =========================================================
-// 6. IMU 安装补偿
+// 6. Pitch/Roll 腿部姿态补偿
+// ---------------------------------------------------------
+// 左拨杆 UP（履带恒速 + 腿部 VMC）时投入。PID 输出是任务空间虚拟力 N，
+// 再乘当前小坦链的动态雅可比 j_dynamic 得到 theta 帧力矩，最后统一做
+// 本车 q 帧/发送方向适配。首测参数对照小坦 hybrid_chassis_app.cpp。
+// =========================================================
+constexpr bool  LEG_ATTITUDE_PID_EN   = true;
+constexpr float LEG_TARGET_PITCH_RAD  = 0.10f; // 对照小坦 NORMAL_PITCH
+constexpr float LEG_TARGET_ROLL_RAD   = 0.0f;
+
+// 架空首测若某一轴补偿方向反了，只把对应符号改成 -1；
+// 不要同时修改 LEG_POLY_OUTPUT_SIGN 或 LEG_LOGIC_SIGN。
+constexpr float LEG_PITCH_FORCE_SIGN = 1.0f;
+constexpr float LEG_ROLL_FORCE_SIGN  = 1.0f;
+
+constexpr float LEG_PITCH_KP          = 260.0f; // N/rad
+constexpr float LEG_ROLL_KP           = 360.0f; // N/rad
+constexpr float LEG_ATTITUDE_KI       = 0.1f;
+constexpr float LEG_ATTITUDE_KD       = 10.0f;  // N·s/rad
+constexpr float LEG_ATTITUDE_I_LIMIT  = 20.0f;  // 积分项限幅
+constexpr float LEG_ATTITUDE_MAX_FORCE = 200.0f; // PID 总输出力限幅 N
+
+constexpr float   LEG_ATT_OUTPUT_CUTOFF_HZ      = 200.0f;
+constexpr uint8_t LEG_ATT_OUTPUT_LPF_ORDER      = 1;
+constexpr float   LEG_ATT_DERIV_CUTOFF_HZ       = 100.0f;
+constexpr uint8_t LEG_ATT_DERIV_LPF_ORDER       = 1;
+constexpr uint16_t LEG_ATT_OLS_ORDER            = 4;
+
+// =========================================================
+// 7. IMU 安装补偿
 // =========================================================
 constexpr float PITCH_OFFSET_RAD = -0.065f; // 车水平时 IMU 静止俯仰偏置，应用层减去
+constexpr float ROLL_OFFSET_RAD  = 0.0f;    // 车水平时 IMU 静止横滚偏置，应用层减去
 
 #endif // __ENGINEER_CONFIG_H__

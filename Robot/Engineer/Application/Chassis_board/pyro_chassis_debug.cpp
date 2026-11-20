@@ -13,8 +13,8 @@
  *   CH8  右腿动态雅可比 j_dynamic
  *   CH9  右腿重力力矩命令（电机坐标系，Nm）
  *   CH10 右腿电机实测力矩（Nm）
- *   CH11 IMU 原始 pitch（含安装偏置修正，rad）
- *   CH12 IMU 滤波 pitch（rad）
+ *   CH11 IMU 滤波 pitch（含安装偏置修正，rad）
+ *   CH12 IMU 滤波 roll（含安装偏置修正，rad）
  *
  * 更多中间量保留在 engineer_data_ctx_t，供 Live Watch 查看：
  *   raw_position / theta_unwrap / gravity_valid / tau_wall / tau_damping。
@@ -90,8 +90,8 @@ static void debug_thread(void *argument)
                                      ? ctx.motor.leg[i]->get_current_torque()
                                      : 0.0f;
             }
-            vars[10] = d.imu_pitch_raw;
-            vars[11] = d.imu_pitch;
+            vars[10] = d.imu_pitch;
+            vars[11] = d.imu_roll;
 
             jcom_send(vars);
         }

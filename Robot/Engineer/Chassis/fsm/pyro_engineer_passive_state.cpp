@@ -55,6 +55,7 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
         owner->_ctx.data.leg_gravity_valid[i]      = false;
         owner->_ctx.data.leg_tau_wall[i]           = 0.0f;
         owner->_ctx.data.leg_tau_damping[i]        = 0.0f;
+        owner->_ctx.data.leg_tau_attitude[i]       = 0.0f;
         owner->_ctx.data.leg_ff_scale[i]           = 0.0f;
         owner->_ctx.data.leg_tau_manual_pid[i]     = 0.0f;
         owner->_ctx.data.leg_control_mode[i]       = 0.0f;
@@ -65,6 +66,8 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
         owner->_leg_en_state[i] = false;
     }
     owner->_leg_vmc_prev = false;
+    owner->_ctx.data.att_force_pitch = 0.0f;
+    owner->_ctx.data.att_force_roll  = 0.0f;
     for (auto *pid : owner->_ctx.pid.leg_pos_pid)
     {
         if (pid) pid->clear();
@@ -73,6 +76,8 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     {
         if (pid) pid->clear();
     }
+    if (owner->_ctx.pid.pitch_pid) owner->_ctx.pid.pitch_pid->clear();
+    if (owner->_ctx.pid.roll_pid)  owner->_ctx.pid.roll_pid->clear();
 }
 
 void engineer_chassis_t::state_passive_t::execute(owner *owner)
