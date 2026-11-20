@@ -107,7 +107,9 @@ void ins_drv_t::_static_ins_task(void *argument)
 void ins_drv_t::_ins_task()
 {
     _dwt_cnt = 0;
-    IMU_QuaternionEKF_Init(10, 0.001, 10000000, 0.9996, 0.01f);
+    // 与小坦一致：EKF 量测加速度一阶低通时间常数 0.004s。
+    // 该系数参与 QuaternionEKF 的加速度低通，影响倾角修正的滞后和噪声。
+    IMU_QuaternionEKF_Init(10, 0.001, 10000000, 0.9996, 0.004f);
     _gravity_n[X] = 0.0f;
     _gravity_n[Y] = 0.0f;
     _gravity_n[Z] = imu_data.gNorm;

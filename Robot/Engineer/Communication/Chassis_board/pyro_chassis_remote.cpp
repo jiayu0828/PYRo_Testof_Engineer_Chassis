@@ -5,9 +5,10 @@
  * 独立任务周期读取 DR16，转换为 engineer_cmd_t 后通过 set_command() 下发。
  *
  * 拨杆分工：
- *   右拨杆 DOWN：8 个电机全部失能；MID：4 个麦轮使能；
- *             UP：8 个电机全部使能，进入瞬间校准腿部零点一次。
- *   左拨杆 UP：履带恒速运行；MID/DOWN：履带停止。
+ *   右拨杆 DOWN：麦轮/履带/腿全部失能；MID：4 个麦轮使能；
+ *             UP：麦轮、履带和腿使能，进入瞬间校准腿部零点一次。
+ *   左拨杆 UP：腿部巡航 VMC 重力补偿模式；MID/DOWN：腿部手动保持。
+ *   当前履带速度环目标固定为 0，右拨杆 UP 仅负责履带电机使能。
  * 后续若改为板间通信/自动任务，只需替换本层，模块内部无需改动。
  */
 extern "C" {
@@ -61,12 +62,12 @@ static void rc_to_cmd()
     s_cmd.leg.calibrate = (s_last_right_sw != sw_pos_t::UP && right_up);
     s_last_right_sw     = right_pos;
 
-    // 左拨杆：UP 启动履带恒速，其余位置（MID/DOWN）停止
-    s_cmd.track_run = (left_pos == sw_pos_t::UP);
+    // 左拨杆：UP 进入腿部巡航 VMC；MID/DOWN 为腿部手动保持
+    s_cmd.leg_vmc_mode = (left_pos == sw_pos_t::UP);
 
-    // 腿手动目标角（右摇杆 ry），两腿同步。
-    // 以完全收起为 0：摇杆中位/上推保持收起(0)，只有下推(负)才往外放下，
-    // 下推到底 = 完全放下(-4.64)。这样校准时摇杆在中位，腿不会自己伸出去
+    // 腿手动行程指令（右摇杆 ry，归一化后换算到 LEG_MANUAL_MIN 量程），两腿同步。
+    // 底盘在左拨杆进入 MID/DOWN 的瞬间先把保持目标同步到当前腿角；摇杆下推时
+    // 再以首次下推位置为基准做无扰映射，摇杆回中后冻结并保持当前目标，不自动回零。
     const float ry      = apply_deadzone(rc.axes.ry);
     const float ry_down = (ry < 0.0f) ? ry : 0.0f;
     s_cmd.leg.target_theta = ry_down * (-LEG_MANUAL_MIN);

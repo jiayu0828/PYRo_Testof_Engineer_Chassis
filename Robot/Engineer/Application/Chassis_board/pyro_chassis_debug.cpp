@@ -4,21 +4,20 @@
  *
  * JustFloat 固定 12 通道：
  *   CH1  左腿相对角 current_leg_theta (rad)
- *   CH2  左腿曲柄角 alpha (rad)，正值=重力链有效，负值=无效
- *   CH3  左腿竖直雅可比 j_vertical
+ *   CH2  左腿 VMC 多项式角 theta_XT (rad)，负值表示重力链无效
+ *   CH3  左腿动态雅可比 j_dynamic
  *   CH4  左腿重力力矩命令（电机坐标系，Nm）
  *   CH5  左腿电机实测力矩（Nm）
  *   CH6  右腿相对角 current_leg_theta (rad)
- *   CH7  右腿曲柄角 alpha (rad)，正值=重力链有效，负值=无效
- *   CH8  右腿竖直雅可比 j_vertical
+ *   CH7  右腿 VMC 多项式角 theta_XT (rad)，负值表示重力链无效
+ *   CH8  右腿动态雅可比 j_dynamic
  *   CH9  右腿重力力矩命令（电机坐标系，Nm）
  *   CH10 右腿电机实测力矩（Nm）
  *   CH11 IMU 原始 pitch（含安装偏置修正，rad）
  *   CH12 IMU 滤波 pitch（rad）
  *
  * 更多中间量保留在 engineer_data_ctx_t，供 Live Watch 查看：
- *   raw_position / theta_unwrap / pose_valid / gravity_valid /
- *   support_arm / n_each。
+ *   raw_position / theta_unwrap / gravity_valid / tau_wall / tau_damping。
  */
 
 #include "pyro_engineer_chassis.h"
@@ -83,7 +82,7 @@ static void debug_thread(void *argument)
                 vars[base + 1] = d.leg_gravity_valid[i]
                                      ? d.leg_alpha[i]
                                      : -d.leg_alpha[i];
-                vars[base + 2] = d.leg_j_vertical[i];
+                vars[base + 2] = d.leg_j_dynamic[i];
                 // 与电机实测力矩统一到电机坐标系，便于逐通道直接比较
                 vars[base + 3] = LEG_LOGIC_SIGN[i] *
                                  d.out_leg_gravity_torque[i];

@@ -34,8 +34,8 @@ void engineer_chassis_t::state_active_t::execute(owner *owner)
     owner->_apply_motor_enable();   // 1. 按右拨杆使能/失能各电机
     owner->_kinematics_solve();     // 2. 麦轮运动学逆解
     owner->_mecanum_control();      // 3. 麦轮速度环
-    owner->_track_control();        // 4. 履带恒速 + 速度环
-    owner->_leg_control();          // 5. 腿双环 PID
+    owner->_track_control();        // 4. 履带速度环（当前目标固定 0）
+    owner->_leg_control();          // 5. 腿手动保持 / 巡航 VMC
     owner->_send_motor_command();   // 6. 发送电机指令
 }
 
