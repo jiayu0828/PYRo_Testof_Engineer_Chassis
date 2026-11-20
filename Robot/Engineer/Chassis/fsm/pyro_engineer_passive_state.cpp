@@ -21,7 +21,7 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     }
     for (auto *pid : owner->_ctx.pid.mecanum_pid)
     {
-        pid->clear();
+        if (pid) pid->clear();
     }
 
     // 履带去使能、数据清零、清 PID
@@ -62,10 +62,11 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
         owner->_leg_target_smooth[i]               = 0.0f;
         owner->_leg_manual_map_active[i]           = false;
         owner->_leg_manual_cmd_offset[i]           = 0.0f;
-        owner->_leg_last_logic_torque[i]            = 0.0f;
-        owner->_leg_en_state[i] = false;
+        owner->_leg_last_logic_torque[i]             = 0.0f;
+        owner->_leg_en_state[i]                      = false;
     }
-    owner->_leg_vmc_prev = false;
+    owner->_leg_vmc_prev  = false;
+    owner->_leg_home_prev = false;
     owner->_ctx.data.att_force_pitch = 0.0f;
     owner->_ctx.data.att_force_roll  = 0.0f;
     for (auto *pid : owner->_ctx.pid.leg_pos_pid)
@@ -82,7 +83,8 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
 
 void engineer_chassis_t::state_passive_t::execute(owner *owner)
 {
-    // 被动状态每周期执行：发零扭矩保证安全
+    // 被动状态每周期执行：输出力矩数组保持 0，再由统一发送边界下发。
+    // 电机 disable 已在 enter() 中完成，这里不重复操作 CAN 使能帧。
     for (int i = 0; i < 4; i++)
     {
         owner->_ctx.data.out_wheel_torque[i] = 0.0f;

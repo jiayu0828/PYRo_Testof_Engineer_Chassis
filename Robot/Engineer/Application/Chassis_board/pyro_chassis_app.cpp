@@ -29,7 +29,8 @@ static void deps_init()
     s_deps = new engineer_deps_t();
 
     /* ---------- 4 个麦轮电机（统一 CAN3，id1~4） ---------- */
-    // 数组索引：[0]FL 前左, [1]FR 前右, [2]BL 后左, [3]BR 后右
+    // 数组索引：[0]FL 前左, [1]FR 前右, [2]BL 后左, [3]BR 后右。
+    // 安装方向唯一配置：engineer_config.h 的 MECANUM_MOTOR_SIGN，创建顺序必须一致。
     s_deps->motor_deps.mecanum[0] =
         new dji_m3508_motor_drv_t(dji_motor_tx_frame_t::id_1, bsp_can::can3); // FL
     s_deps->motor_deps.mecanum[1] =
@@ -42,13 +43,17 @@ static void deps_init()
     /* ---------- 麦轮速度环 PID ---------- */
     for (int i = 0; i < 4; i++)
     {
+        // 参数顺序：Kp, Ki, Kd, 积分限幅, 输出限幅,
+        //          输出滤波截止/阶数, 微分滤波截止/阶数, OLS 阶数。
         s_deps->pid_deps.mecanum_pid[i] =
             new pid_t(0.3f, 0.0008f, 0.0002f,
-                      1.0f, 10.0f, 20.0f, 1, 0, 0, 0);
+                      1.0f, 10.0f,
+                      20.0f, 1U,
+                      0.0f, 0U, 0U);
     }
 
     /* ---------- 履带电机（达妙 4310，CAN2） ---------- */
-    // 索引 [0]=L 左履带, [1]=R 右履带
+    // 索引 [0]=L 左履带, [1]=R 右履带；方向唯一配置：TRACK_MOTOR_SIGN。
     s_deps->motor_deps.track[0] =
         new dm_motor_drv_t(0x11, 0x21, bsp_can::can2);
     s_deps->motor_deps.track[1] =
@@ -69,10 +74,10 @@ static void deps_init()
     for (int i = 0; i < 2; i++)
     {
         s_deps->pid_deps.track_pid[i] =
-            new pid_t(0.2f, 0.00f, 0.0f, 0.5f, 27.0f, pid_t::INTEGRAL_LIMIT);
+            new pid_t(0.2f, 0.0f, 0.0f, 0.5f, 27.0f, pid_t::INTEGRAL_LIMIT);
     }
 
-    /* ---------- 腿电机（达妙，CAN1） ---------- */
+    /* ---------- 腿电机（达妙，CAN1；方向唯一配置：LEG_MOTOR_SIGN） ---------- */
     s_deps->motor_deps.leg[0] =
         new dm_motor_drv_t(0x31, 0x41, bsp_can::can1);
     s_deps->motor_deps.leg[1] =
@@ -89,35 +94,37 @@ static void deps_init()
         dm->set_runtime_kd(0.0f);
     }
 
-    /* ---------- 腿双环 PID（保守初值，上车再调） ---------- */
+    /* ---------- 腿双环 PID  ---------- */
     for (int i = 0; i < 2; i++)
     {
-        // 外环位置环：角度误差 -> 目标角速度，限幅匹配电机速度
+        // 外环位置环：角度误差 -> 目标角速度 rad/s；积分限幅/输出限幅均为 5.655 rad/s
         s_deps->pid_deps.leg_pos_pid[i] =
-            new pid_t(8.0f, 0.0f, 0.0f, LEG_MAX_SPEED, LEG_MAX_SPEED,
-                      pid_t::INTEGRAL_LIMIT);
-        // 内环速度环：速度误差 -> 力矩，限幅匹配力矩范围
+            new pid_t(8.0f, 0.0f, 0.0f, 0.0f, 5.655f,
+                      pid_t::INTEGRAL_LIMIT);//降低最大速度
+        // 内环速度环：速度误差 -> 力矩 N·m；积分限幅/输出限幅均为 27 N·m
         s_deps->pid_deps.leg_vel_pid[i] =
-            new pid_t(1.0f, 0.5f, 0.0f, LEG_MAX_TORQUE, LEG_MAX_TORQUE,
+            new pid_t(1.0f, 0.5f, 0.0f, 27.0f, 27.0f,
                       pid_t::INTEGRAL_LIMIT);
     }
 
-    /* ---------- 腿部 VMC 姿态力 PID（输出任务空间虚拟力 N，对照小坦参数） ---------- */
+    /* ---------- 腿部 VMC 姿态力 PID（仅左拨杆 UP 投入，输出任务空间虚拟力 N） ---------- */
+    // 参数顺序：Kp, Ki, Kd, 积分限幅, 输出限幅,
+    //          输出滤波截止/阶数, 微分滤波截止/阶数, OLS 阶数, 改善选项。
     s_deps->pid_deps.pitch_pid = new pid_t(
-        LEG_PITCH_KP, LEG_ATTITUDE_KI, LEG_ATTITUDE_KD,
-        LEG_ATTITUDE_I_LIMIT, LEG_ATTITUDE_MAX_FORCE,
-        LEG_ATT_OUTPUT_CUTOFF_HZ, LEG_ATT_OUTPUT_LPF_ORDER,
-        LEG_ATT_DERIV_CUTOFF_HZ, LEG_ATT_DERIV_LPF_ORDER,
-        LEG_ATT_OLS_ORDER,
+        360.0f, 0.0f, 5.0f,
+        20.0f, 200.0f,
+        200.0f, 1U,
+        100.0f, 1U,
+        4U,
         pid_t::INTEGRAL_LIMIT | pid_t::OUTPUT_FILTER |
             pid_t::DERIVATIVE_FILTER | pid_t::DERIVATIVE_ON_MEASUREMENT);
 
     s_deps->pid_deps.roll_pid = new pid_t(
-        LEG_ROLL_KP, LEG_ATTITUDE_KI, LEG_ATTITUDE_KD,
-        LEG_ATTITUDE_I_LIMIT, LEG_ATTITUDE_MAX_FORCE,
-        LEG_ATT_OUTPUT_CUTOFF_HZ, LEG_ATT_OUTPUT_LPF_ORDER,
-        LEG_ATT_DERIV_CUTOFF_HZ, LEG_ATT_DERIV_LPF_ORDER,
-        LEG_ATT_OLS_ORDER,
+        360.0f, 0.0f, 5.0f,
+        20.0f, 200.0f,
+        200.0f, 1U,
+        100.0f, 1U,
+        4U,
         pid_t::INTEGRAL_LIMIT | pid_t::OUTPUT_FILTER |
             pid_t::DERIVATIVE_FILTER | pid_t::DERIVATIVE_ON_MEASUREMENT);
 }

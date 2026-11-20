@@ -7,42 +7,46 @@
 #include "pyro_referee.h"
 #include "pyro_ins.h"
 
-namespace pyro{
+namespace pyro
+{
 
-/*==================全局驱动指针========================*/
-// CAN 驱动指针
+/* ====================== 全局驱动指针 ====================== */
 can_drv_t *can1_drv = nullptr;
 can_drv_t *can2_drv = nullptr;
 can_drv_t *can3_drv = nullptr;
 
+/* ====================== Engineer 模块 C 入口 ====================== */
 extern "C" void chassis_app_init(void);
 extern "C" void chassis_remote_init(void);
 extern "C" void chassis_debug_init(void);
 
-extern "C"{
-void pyro_init_thread(void *argument){
+extern "C"
+{
+
+void pyro_init_thread(void *argument)
+{
     (void)argument;
 
     // DWT 定时器初始化（480MHz 主频）
     dwt_drv_t::init(480);
 
-    /*      UART 初始化（DR16 专用 UART5 在下方单独配置）      */
+    /* UART 初始化（DR16 专用 UART5 在下方单独配置） */
     bsp_uart::get_uart1().enable_rx_dma();
     bsp_uart::get_uart7().enable_rx_dma();
     bsp_uart::get_uart10().enable_rx_dma();
 
-    /*       CAN 初始化            */
-    // CAN1
+    /* CAN 初始化 */
+    // CAN1：腿电机
     can1_drv = &bsp_can::get_can1();
     can1_drv->init();
     can1_drv->start();
 
-    // CAN2
+    // CAN2：履带电机
     can2_drv = &bsp_can::get_can2();
     can2_drv->init();
     can2_drv->start();
 
-    // CAN3：4 个 M3508 轮电机
+    // CAN3：4 个 M3508 麦轮电机
     can3_drv = &bsp_can::get_can3();
     can3_drv->init();
     can3_drv->start();
@@ -54,7 +58,7 @@ void pyro_init_thread(void *argument){
     referee_drv_t::get_instance()->init();
 #endif
 
-    /*      DR16 遥控器（UART5，100000 波特率、9 位、2 停止位、偶校验）      */
+    /* DR16 遥控器：UART5，100000 波特率、9 位、2 停止位、偶校验 */
 #ifdef DR16_UART
     dr16_drv_t::instance().start();
     dr16_drv_t::instance().enable();
@@ -63,27 +67,28 @@ void pyro_init_thread(void *argument){
     DR16_UART.enable_rx_dma();
 #endif
 
-    /*      IMU（BMI088）初始化，内部创建 INS 任务      */
+    /* IMU（BMI088）初始化，内部创建 INS 任务 */
     ins_config_t ins_cfg;
     ins_cfg.gx_offset = -0.000938494108f;
     ins_cfg.gy_offset = -0.0022492914f;
     ins_cfg.gz_offset = 0.000906182453f;
-    ins_cfg.g_norm = 9.80828953f;
+    ins_cfg.g_norm    = 9.80828953f;
 
     ins_cfg.direct    = ins_config_t::imu_direct_t::DIRECT_4;
     ins_cfg.calibrate = false;
     ins_drv_t::get_instance()->init(ins_cfg);
 
-    /*      底盘模块装配（电机/PID 依赖、模块启动）      */
+    /* 底盘模块装配：电机/PID 依赖注入并启动模块任务 */
     chassis_app_init();
 
-    /*      遥控器通信任务（DR16 读遥控并下发命令）      */
+    /* 遥控器通信任务：DR16 读遥控并下发 engineer_cmd_t */
     chassis_remote_init();
 
-    /*      调试任务（JCOM 多通道导出履带/腿/IMU 数据）      */
+    /* 调试任务：JustFloat 多通道输出腿/IMU 数据 */
     chassis_debug_init();
 
     vTaskDelete(nullptr);
 }
-}
-}
+
+} // extern "C"
+} // namespace pyro

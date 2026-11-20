@@ -1,6 +1,6 @@
 /**
  * @file pyro_chassis_debug.cpp
- * @brief 后腿重力补偿调试任务（JustFloat，UART1 / 921600）
+ * @brief Engineer 底盘调试任务：后腿 VMC/力矩与 IMU 姿态 JustFloat 输出（UART1）
  *
  * JustFloat 固定 12 通道：
  *   CH1  左腿相对角 current_leg_theta (rad)
@@ -17,7 +17,8 @@
  *   CH12 IMU 滤波 roll（含安装偏置修正，rad）
  *
  * 更多中间量保留在 engineer_data_ctx_t，供 Live Watch 查看：
- *   raw_position / theta_unwrap / gravity_valid / tau_wall / tau_damping。
+ *   raw_position / theta_unwrap / target_theta / target_radps /
+ *   tau_manual_pid / tau_attitude / tau_wall / tau_damping / control_mode。
  */
 
 #include "pyro_engineer_chassis.h"
@@ -83,8 +84,8 @@ static void debug_thread(void *argument)
                                      ? d.leg_alpha[i]
                                      : -d.leg_alpha[i];
                 vars[base + 2] = d.leg_j_dynamic[i];
-                // 与电机实测力矩统一到电机坐标系，便于逐通道直接比较
-                vars[base + 3] = LEG_LOGIC_SIGN[i] *
+                // 调试通道按电机坐标系显示；发送边界同样使用 LEG_MOTOR_SIGN。
+                vars[base + 3] = LEG_MOTOR_SIGN[i] *
                                  d.out_leg_gravity_torque[i];
                 vars[base + 4] = ctx.motor.leg[i]
                                      ? ctx.motor.leg[i]->get_current_torque()

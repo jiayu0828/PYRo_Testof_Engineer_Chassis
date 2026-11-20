@@ -8,7 +8,8 @@
  *   右拨杆 DOWN：麦轮/履带/腿全部失能；MID：4 个麦轮使能；
  *             UP：麦轮、履带和腿使能，进入瞬间校准腿部零点一次。
  *   左拨杆 UP：履带按固定 RPM 恒速旋转，同时腿部进入重力 VMC + Pitch/Roll 补偿；
- *             MID/DOWN：履带目标 0，腿部为手动保持。
+ *             DOWN：履带目标 0，腿部双环 PID 固定返回校准零点；
+ *             MID：履带目标 0，腿部保留右摇杆手动增量控制。
  *   右拨杆 UP 仍负责履带/腿电机使能；右拨杆非 UP 时即使左拨杆 UP 也不会输出履带力矩。
  * 后续若改为板间通信/自动任务，只需替换本层，模块内部无需改动。
  */
@@ -63,12 +64,12 @@ static void rc_to_cmd()
     s_cmd.leg.calibrate = (s_last_right_sw != sw_pos_t::UP && right_up);
     s_last_right_sw     = right_pos;
 
-    // 左拨杆：UP 同时启动履带恒速和腿部姿态 VMC；MID/DOWN 履带停止、腿手动
-    s_cmd.track_run = (left_pos == sw_pos_t::UP);
+    // 左拨杆：UP 启动履带恒速和腿部姿态 VMC；MID 腿部双环回零；DOWN 保留手动控腿。
+    s_cmd.track_run       = (left_pos == sw_pos_t::UP);
+    s_cmd.leg.home_to_zero = (left_pos == sw_pos_t::MID);
 
-    // 腿手动行程指令（右摇杆 ry，归一化后换算到 LEG_MANUAL_MIN 量程），两腿同步。
-    // 底盘在左拨杆进入 MID/DOWN 的瞬间先把保持目标同步到当前腿角；摇杆下推时
-    // 再以首次下推位置为基准做无扰映射，摇杆回中后冻结并保持当前目标，不自动回零。
+    // 左拨杆 DOWN 时使用的腿手动行程指令（右摇杆 ry，换算到 LEG_MANUAL_MIN 量程）。
+    // MID 回零分支不使用该目标，避免摇杆量干扰零点保持。
     const float ry      = apply_deadzone(rc.axes.ry);
     const float ry_down = (ry < 0.0f) ? ry : 0.0f;
     s_cmd.leg.target_theta = ry_down * (-LEG_MANUAL_MIN);

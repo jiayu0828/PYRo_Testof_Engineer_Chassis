@@ -4,6 +4,18 @@
 #include <cstdint>
 
 // =========================================================
+// 0. 电机安装方向表（硬件边界唯一方向定义）
+// ---------------------------------------------------------
+// +1：电机反馈正方向与底盘/关节逻辑正方向一致；
+// -1：电机反装或镜像安装，反馈读取与力矩发送都乘同一个符号。
+// 控制算法内部的坐标变换符号不属于电机安装方向，放在对应算法段。
+// 数组顺序必须与 pyro_chassis_app.cpp 中电机创建顺序一致。
+// =========================================================
+constexpr int MECANUM_MOTOR_SIGN[4] = {1, -1, 1, -1}; // [0]FL [1]FR [2]BL [3]BR
+constexpr int TRACK_MOTOR_SIGN[2]   = {1, -1};        // [0]L 左履带 [1]R 右履带
+constexpr int LEG_MOTOR_SIGN[2]     = {1, -1};        // [0]L 左腿 [1]R 右腿
+
+// =========================================================
 // 1. 麦轮底盘几何与运动学参数
 // =========================================================
 constexpr float WHEEL_RADIUS       = 0.076f; // 麦轮半径 m
@@ -20,7 +32,7 @@ constexpr float K_BR = (WHEELBASE + TRACK_WIDTH_BACK) / 2.0f;  // 右后麦轮�
 constexpr float TRACK_SPACING = 0.45f; // 左右履带中心距离 m
 
 // 左拨杆 UP 且右拨杆 UP 使能履带时，左右履带的逻辑目标转速 RPM。
-// 左右镜像物理方向由反馈/发送层符号处理，因此这里两个逻辑目标同号。
+// 左右电机镜像方向统一由 TRACK_MOTOR_SIGN 处理，因此逻辑目标同号。
 constexpr float TRACK_CONSTANT_RPM = 100.0f;
 
 // =========================================================
@@ -32,8 +44,7 @@ constexpr float MAX_CHASSIS_WZ = 4.5f; // 最大旋转角速度 rad/s
 
 // =========================================================
 // 3. 后腿机械实测参数（SolidWorks/实测，单位 m、rad）
-//    当前运行的小坦巡航 VMC 适配链未直接引用以下四杆尺寸；
-//    保留在固件中，供后续恢复本车四杆/F 点运动学链使用。
+// 后续使用
 // =========================================================
 constexpr float LEG_B_X = -0.06495f; // 固定铰 B 的车体 x 坐标
 constexpr float LEG_B_Y = -0.03750f; // 固定铰 B 的车体 y 坐标
@@ -55,9 +66,6 @@ constexpr int LEG_BRANCH = -1; // 装配分支（实测 D 对应 -1）
 // 若端到端实测电机角/曲柄角不是约 2.0，应以实测值覆盖，禁止再按旧 CAD 推断叠加同步带。
 constexpr float LEG_EXTERNAL_RATIO = 2.0f;
 
-// 物理电机角增大对应曲柄局部角增大(+1)/减小(-1)。镜像装配导致左右相反。
-constexpr int LEG_MOTOR_DIR[2] = {1, -1};
-
 // 校准位（相对角 0）对应的绝对曲柄角：完全收起的内切死点 225.89°
 constexpr float LEG_CAL_ALPHA = 3.94250156f;
 
@@ -67,14 +75,20 @@ constexpr float LEG_CAL_ALPHA = 3.94250156f;
 constexpr float LEG_MAX_TORQUE = 27.0f;  // 腿电机最终输出力矩上限 N·m
 constexpr float LEG_MAX_SPEED  = 5.655f; // 腿电机输出轴速度上限 rad/s
 
+// 腿部软件校准点（电机多圈绝对角 rad，用户实车标定；_calibrate_leg 使用）
+constexpr float LEG_CALI_LEFT  = 1.03348756f;  // 左腿校准位绝对角
+constexpr float LEG_CALI_RIGHT = -1.18842185f; // 右腿校准位绝对角
+
 // 手动控腿行程（电机输出轴相对角，rad）：校准收起位为 0，放下方向为负
 constexpr float LEG_MANUAL_MAX = 0.0f;
 constexpr float LEG_MANUAL_MIN = -2.28f;
 
 constexpr float LEG_TARGET_LERP = 0.02f; // 手动目标角一阶平滑系数
 
-// 腿逻辑方向（镜像装配）：左腿 +1，右腿 -1；发送层统一乘该符号
-constexpr int LEG_LOGIC_SIGN[2] = {1, -1};
+// 当前固定目标 0 回零分支（磁盘现有 !home_mode 分支）的限速线性插值。
+// 插值对象是送入位置环的参考角，单位为腿电机输出轴 q 帧 rad。
+constexpr float LEG_ZERO_INTERP_VMAX = 6.0f;  // 回零参考角最大接近速度 rad/s
+constexpr float LEG_ZERO_INTERP_EPS  = 0.005f; // 参考角到位吸附死区 rad
 
 // 全模式 q 空间主动阻尼：tau_d = -Kd * qdot
 constexpr float LEG_F_JOINT_DAMP_KD  = 4.0f; // N·m·s/rad(q)
@@ -83,30 +97,20 @@ constexpr float LEG_F_JOINT_DAMP_MAX = 6.0f; // N·m
 // 输出斜率限制：每 1ms 周期最大力矩变化量 N·m，抑制模式切换/有效域跳变冲击
 constexpr float LEG_F_TORQUE_SLEW_STEP = 0.20f;
 
-// MID 手动保持段默认不叠加重力前馈；操作员主动推摇杆时，重力诊断/前馈临时打折
-constexpr bool  LEG_MANUAL_GRAVITY_FF   = false;
-constexpr float LEG_MANUAL_CMD_FF_SCALE = 0.30f;
-constexpr float LEG_MANUAL_STICK_EPS    = 0.05f; // 右摇杆下推判定死区
+// 左拨杆 DOWN 手动控腿时，右摇杆下推判定死区；MID 回零分支不使用摇杆。
+constexpr float LEG_MANUAL_STICK_EPS = 0.05f;
 
 // =========================================================
-// 5. 小坦巡航 _leg_vmc() 适配链
+// 5. 小坦巡航 _leg_vmc() 适配链（仅左拨杆 UP 投入）
 // ---------------------------------------------------------
-// 当前工程校准收起位 q=0、放下为负；小坦 theta_XT 站立角域为正，因此：
-//     theta_XT = LEG_POLY_THETA_SIGN * q + LEG_POLY_THETA_OFFSET
-// 小坦 helper 输出 theta 帧 tau_XT；调用层用 LEG_POLY_OUTPUT_SIGN
-// 转成本车统一 q 逻辑力矩，发送层最后再乘 LEG_LOGIC_SIGN。
-// 方向反了只允许调整 LEG_POLY_OUTPUT_SIGN，禁止同时改多个方向宏。
-// =========================================================
+// 这里的符号和多项式属于腿关节 q 帧到小坦 theta_XT 帧的算法坐标适配，
+// 不是电机硬件安装方向；硬件方向统一看第 0 节 MOTOR_SIGN 表。
 constexpr bool  LEG_VMC_GRAVITY_EN = true;
-constexpr float LEG_GRAVITY        = 9.80665f; // m/s²
+constexpr float LEG_GRAVITY        = 9.80665f;  // 重力加速度 m/s²
+constexpr float LEG_POLY_VEH_MASS   = 16.0f;     // 当前 VMC 链使用的整车等效质量 kg
 
-// 注意：当前磁盘整理保留整理前数值 16.0kg；小坦 hybrid_config.h 的 MASS=25.5kg。
-// 纯代码整理不改变控制参数，实车重力验收前需再次确认应使用哪一个质量。
-constexpr float LEG_POLY_VEH_MASS = 16.0f;
-
-constexpr float LEG_POLY_THETA_SIGN   = -1.0f;
+constexpr float LEG_Q_XT_SIGN       = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
 constexpr float LEG_POLY_THETA_OFFSET = 0.0f;
-constexpr float LEG_POLY_OUTPUT_SIGN  = -1.0f;
 
 // 小坦多项式有效拟合域与本车 q 对应窗口
 constexpr float LEG_POLY_THETA_MIN = 0.15f;
@@ -151,37 +155,12 @@ constexpr float LEG_XT_XB_COEF[LEG_XT_XB_DEGREE + 1] = {
 constexpr float LEG_XT_YB_COEF[LEG_XT_YB_DEGREE + 1] = {
     -0.0056f, 0.0311f, -0.0793f, 0.1957f, 0.0745f};
 
-// =========================================================
-// 6. Pitch/Roll 腿部姿态补偿
-// ---------------------------------------------------------
-// 左拨杆 UP（履带恒速 + 腿部 VMC）时投入。PID 输出是任务空间虚拟力 N，
-// 再乘当前小坦链的动态雅可比 j_dynamic 得到 theta 帧力矩，最后统一做
-// 本车 q 帧/发送方向适配。首测参数对照小坦 hybrid_chassis_app.cpp。
-// =========================================================
-constexpr bool  LEG_ATTITUDE_PID_EN   = true;
-constexpr float LEG_TARGET_PITCH_RAD  = 0.10f; // 对照小坦 NORMAL_PITCH
-constexpr float LEG_TARGET_ROLL_RAD   = 0.0f;
-
-// 架空首测若某一轴补偿方向反了，只把对应符号改成 -1；
-// 不要同时修改 LEG_POLY_OUTPUT_SIGN 或 LEG_LOGIC_SIGN。
-constexpr float LEG_PITCH_FORCE_SIGN = 1.0f;
-constexpr float LEG_ROLL_FORCE_SIGN  = 1.0f;
-
-constexpr float LEG_PITCH_KP          = 260.0f; // N/rad
-constexpr float LEG_ROLL_KP           = 360.0f; // N/rad
-constexpr float LEG_ATTITUDE_KI       = 0.1f;
-constexpr float LEG_ATTITUDE_KD       = 10.0f;  // N·s/rad
-constexpr float LEG_ATTITUDE_I_LIMIT  = 20.0f;  // 积分项限幅
-constexpr float LEG_ATTITUDE_MAX_FORCE = 200.0f; // PID 总输出力限幅 N
-
-constexpr float   LEG_ATT_OUTPUT_CUTOFF_HZ      = 200.0f;
-constexpr uint8_t LEG_ATT_OUTPUT_LPF_ORDER      = 1;
-constexpr float   LEG_ATT_DERIV_CUTOFF_HZ       = 100.0f;
-constexpr uint8_t LEG_ATT_DERIV_LPF_ORDER       = 1;
-constexpr uint16_t LEG_ATT_OLS_ORDER            = 4;
+// Pitch/Roll 姿态环参数归属：
+// - PID 增益、限幅、滤波：pyro_chassis_app.cpp 的 pitch_pid/roll_pid 构造函数；
+// - 目标角、使能、输出极性：pyro_engineer_chassis.cpp 顶部的姿态环运行参数区。
 
 // =========================================================
-// 7. IMU 安装补偿
+// 6. IMU 安装补偿
 // =========================================================
 constexpr float PITCH_OFFSET_RAD = -0.065f; // 车水平时 IMU 静止俯仰偏置，应用层减去
 constexpr float ROLL_OFFSET_RAD  = 0.0f;    // 车水平时 IMU 静止横滚偏置，应用层减去

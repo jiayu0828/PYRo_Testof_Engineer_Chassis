@@ -34,7 +34,8 @@ struct leg_cmd_t
 {
     bool  en;            // 腿使能（右拨杆 UP）
     bool  calibrate;     // 校准脉冲（右拨杆进入 UP 的那一帧为 true）
-    float target_theta;  // 手动目标相对电机角（右摇杆 ry，两腿同步）
+    bool  home_to_zero;  // 左拨杆 MID：双环 PID 固定控制回校准零点
+    float target_theta;  // 左拨杆 DOWN 手动目标相对电机角（右摇杆 ry，两腿同步）
 };
 
 // --- 总命令结构体 ---
@@ -47,8 +48,10 @@ struct engineer_cmd_t final : public cmd_base_t
     bool mecanum_en;   // 麦轮使能（右拨杆 MID/UP）
     bool track_en;     // 履带电机使能（右拨杆 UP）
 
-    // 左拨杆 UP：履带固定转速运行，同时腿部进入“重力 VMC + Pitch/Roll 补偿”；
-    // 左拨杆 MID/DOWN：履带目标 0，腿部为手动保持模式。
+    // 左拨杆档位组合：
+    // UP   = 履带恒速 + 腿部重力 VMC/Pitch/Roll 补偿；
+    // MID  = 履带停止 + 腿部双环 PID 回零（home_to_zero）；
+    // DOWN = 履带停止 + 腿部右摇杆手动控制。
     bool track_run;
 
     engineer_cmd_t()
@@ -59,6 +62,7 @@ struct engineer_cmd_t final : public cmd_base_t
         chassis.wz       = 0.0f;
         leg.en           = false;
         leg.calibrate    = false;
+        leg.home_to_zero = false;
         leg.target_theta = 0.0f;
         mecanum_en       = false;
         track_en         = false;
@@ -118,10 +122,10 @@ struct engineer_data_ctx_t
     float leg_theta_cal[2]{};         // 校准时的电机多圈角基准
     float current_leg_theta[2]{};     // 相对电机角（校准点为 0，rad）
     float current_leg_radps[2]{};     // 电机输出轴角速度 rad/s
-    float target_leg_theta[2]{};      // 目标相对电机角（手动模式来自右摇杆）
+    float target_leg_theta[2]{};      // 目标相对电机角：MID=0，DOWN 来自右摇杆映射
     float target_leg_radps[2]{};      // 位置环输出的目标角速度
     float out_leg_torque[2]{};        // 最终输出逻辑力矩 N·m
-    float out_leg_gravity_torque[2]{}; // 重力前馈力矩（逻辑坐标系，N·m）
+    float out_leg_gravity_torque[2]{}; // UP/VMC 重力力矩（q 逻辑坐标系，N·m）；MID/DOWN 为 0
     bool  leg_calibrated[2]{};        // 是否已校准
 
     // ---- 腿部 VMC/调试中间量（供 JustFloat 和 Live Watch 核查）----
@@ -133,7 +137,7 @@ struct engineer_data_ctx_t
     float leg_ff_scale[2]{};        // 重力前馈缩放系数
     float leg_tau_manual_pid[2]{};  // 手动双环 PID 输出力矩 N·m
     float leg_tau_attitude[2]{};    // Pitch/Roll 姿态 PID 映射后的 q 帧力矩 N·m
-    float leg_control_mode[2]{};    // 0=失能，1=手动保持，2=履带+姿态 VMC
+    float leg_control_mode[2]{};    // 0=失能，1=DOWN 手动，2=UP VMC，3=MID 双环回零
     float att_force_pitch{};        // Pitch PID 输出的任务空间虚拟力 N
     float att_force_roll{};         // Roll PID 输出的左右差动力 N
 
@@ -212,7 +216,7 @@ class engineer_chassis_t final
     void _kinematics_solve();         // 麦轮逆运动学求解
     void _mecanum_control();          // 麦轮速度环 PID
     void _track_control();            // 履带恒速/停止速度环 PID
-    void _leg_control();              // 腿手动保持 / 履带姿态 VMC
+    void _leg_control();              // 腿控：UP VMC、MID 回零、DOWN 手动
     void _send_motor_command() const; // 发送所有电机指令
 
     // 麦轮混合运动学求解器
@@ -228,10 +232,12 @@ class engineer_chassis_t final
     float _imu_roll_lpf{};     // IMU roll 一阶低通状态
     bool  _imu_lpf_init{false};
 
-    float _leg_target_smooth[2]{};     // 手动模式平滑目标角
-    bool  _leg_vmc_prev{false};        // 上一帧左拨杆 VMC 模式，用于模式边沿无扰切换
-    bool  _leg_manual_map_active[2]{}; // 首次下推摇杆后的基准映射状态
-    float _leg_manual_cmd_offset[2]{}; // 摇杆量到平滑目标的映射偏置
+    float _leg_target_smooth[2]{};      // 送入位置环的平滑参考角
+    bool  _leg_zero_interp_init[2]{};   // 固定 0 回零分支插值参考已从当前角初始化
+    bool  _leg_vmc_prev{false};         // 上一帧左拨杆 UP/VMC 模式，用于模式边沿清环
+    bool  _leg_home_prev{false};        // 上一帧 home_to_zero 模式，用于进入时清环
+    bool  _leg_manual_map_active[2]{};  // MID 首次下推摇杆后的基准映射状态
+    float _leg_manual_cmd_offset[2]{};  // MID 摇杆量到平滑目标的映射偏置
     float _leg_last_logic_torque[2]{};  // 上一帧最终逻辑力矩，用于斜率限制
 
     // 各电机当前使能状态（边沿检测用，避免每周期重复发 enable/disable 帧）

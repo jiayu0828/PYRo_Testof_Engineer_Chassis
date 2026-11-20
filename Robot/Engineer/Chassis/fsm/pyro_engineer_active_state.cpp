@@ -37,7 +37,7 @@ void engineer_chassis_t::state_active_t::execute(owner *owner)
     owner->_kinematics_solve();     // 2. 麦轮运动学逆解
     owner->_mecanum_control();      // 3. 麦轮速度环
     owner->_track_control();        // 4. 履带恒速/停止速度环
-    owner->_leg_control();          // 5. 腿手动保持 / 履带姿态 VMC
+    owner->_leg_control();          // 5. 腿控：UP VMC / MID 回零 / DOWN 手动
     owner->_send_motor_command();   // 6. 发送电机指令
 }
 
