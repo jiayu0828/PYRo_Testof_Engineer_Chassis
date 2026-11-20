@@ -1,24 +1,15 @@
 /**
  * @file pyro_chassis_debug.cpp
- * @brief Engineer 底盘调试任务：后腿 VMC/力矩与 IMU 姿态 JustFloat 输出（UART1）
+ * @brief Engineer 底盘调试任务：左前轮功率模型标定 JustFloat 输出（UART1）
  *
- * JustFloat 固定 12 通道：
- *   CH1  左腿相对角 current_leg_theta (rad)
- *   CH2  左腿 VMC 多项式角 theta_XT (rad)，负值表示重力链无效
- *   CH3  左腿动态雅可比 j_dynamic
- *   CH4  左腿重力力矩命令（电机坐标系，Nm）
- *   CH5  左腿电机实测力矩（Nm）
- *   CH6  右腿相对角 current_leg_theta (rad)
- *   CH7  右腿 VMC 多项式角 theta_XT (rad)，负值表示重力链无效
- *   CH8  右腿动态雅可比 j_dynamic
- *   CH9  右腿重力力矩命令（电机坐标系，Nm）
- *   CH10 右腿电机实测力矩（Nm）
- *   CH11 IMU 滤波 pitch（含安装偏置修正，rad）
- *   CH12 IMU 滤波 roll（含安装偏置修正，rad）
+ * 当前标定通道固定为左前轮 FL（mecanum 数组索引 0，CAN3 ID1）：
+ *   CH1  0x212 功率计实测功率 power（W）
+ *   CH2  左前轮逻辑力矩指令 torque（N·m，PID 输出；发送边界再乘电机方向）
+ *   CH3  左前轮轮轴转速 rpm（已换算到轮轴并应用 MECANUM_MOTOR_SIGN）
+ *   CH4  左前轮 M3508 电调温度 temp（℃）
  *
- * 更多中间量保留在 engineer_data_ctx_t，供 Live Watch 查看：
- *   raw_position / theta_unwrap / target_theta / target_radps /
- *   tau_manual_pid / tau_attitude / tau_wall / tau_damping / control_mode。
+ * 功率计当前挂在腿电机所在 CAN1，CAN ID=0x212。
+ * 本任务只通过 UART1 发送标定数据，不参与功率闭环控制。
  */
 
 #include "pyro_engineer_chassis.h"
@@ -30,15 +21,17 @@
 
 using namespace pyro;
 
-static constexpr uint8_t  DEBUG_VAR_COUNT = 12;
-static constexpr uint32_t DEBUG_PERIOD_MS = 10;
+static constexpr uint8_t  DEBUG_VAR_COUNT  = 4;
+static constexpr uint32_t DEBUG_PERIOD_MS  = 10;
+static constexpr uint8_t  CALIB_WHEEL_IDX  = 0; // 左前轮 FL
+
 static const uint8_t JCOM_FRAME_TAIL[4] = {0x00, 0x00, 0x80, 0x7F};
 
 static uart_drv_t         *s_debug_uart = nullptr;
 static engineer_chassis_t *s_chassis    = nullptr;
 static uint8_t s_send_buf[DEBUG_VAR_COUNT * sizeof(float) + sizeof(JCOM_FRAME_TAIL)];
 
-// 不占 JustFloat 通道；可在调试器中观察，用于定位静默丢帧和 UART 写入失败
+// 不占 JustFloat 通道；可在调试器中观察，用于判断 UART 写入是否失败。
 static volatile uint32_t s_debug_frame_seq      = 0;
 static volatile uint32_t s_debug_uart_error_cnt = 0;
 
@@ -75,24 +68,10 @@ static void debug_thread(void *argument)
             const auto &ctx = s_chassis->get_ctx();
             const auto &d   = ctx.data;
 
-            for (int i = 0; i < 2; i++)
-            {
-                const int base = i * 5;
-                vars[base + 0] = d.current_leg_theta[i];
-                // alpha 实际始终为正；用负号携带“当前重力链无效”标志
-                vars[base + 1] = d.leg_gravity_valid[i]
-                                     ? d.leg_alpha[i]
-                                     : -d.leg_alpha[i];
-                vars[base + 2] = d.leg_j_dynamic[i];
-                // 调试通道按电机坐标系显示；发送边界同样使用 LEG_MOTOR_SIGN。
-                vars[base + 3] = LEG_MOTOR_SIGN[i] *
-                                 d.out_leg_gravity_torque[i];
-                vars[base + 4] = ctx.motor.leg[i]
-                                     ? ctx.motor.leg[i]->get_current_torque()
-                                     : 0.0f;
-            }
-            vars[10] = d.imu_pitch;
-            vars[11] = d.imu_roll;
+            vars[0] = d.power_meter_w;
+            vars[1] = d.out_wheel_torque[CALIB_WHEEL_IDX];
+            vars[2] = d.current_wheel_rpm[CALIB_WHEEL_IDX];
+            vars[3] = d.current_wheel_temp[CALIB_WHEEL_IDX];
 
             jcom_send(vars);
         }

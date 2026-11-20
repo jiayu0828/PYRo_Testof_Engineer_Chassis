@@ -4,6 +4,8 @@
 #include "pyro_module_base.h"
 #include "pyro_algo_pid.h"
 #include "pyro_motor_base.h"
+#include "pyro_powermeter.h"
+#include "pyro_power_control.h"
 #include "pyro_kin_hybrid.h" // 混合底盘运动学（麦轮速度解算，支持非对称独立 K）
 #include "engineer_config.h"
 
@@ -94,6 +96,9 @@ struct engineer_deps_t
         pid_t *roll_pid{nullptr};       // 腿部 VMC 的 Roll 姿态力 PID
     };
 
+    // 外接 CAN 功率计（当前标定阶段挂在 CAN1，CAN ID=0x212；只采集不参与闭环）
+    powermeter_drv_t *powermeter{nullptr};
+
     motor_deps_t motor_deps{};
     pid_deps_t   pid_deps{};
 };
@@ -107,7 +112,18 @@ struct engineer_data_ctx_t
     bool  wheel_online[4]{};
     float current_wheel_rpm[4]{}; // 反馈：轮轴 RPM（逻辑正方向）
     float target_wheel_rpm[4]{};  // 目标：轮轴 RPM
-    float out_wheel_torque[4]{};  // 输出力矩
+    float out_wheel_torque[4]{};  // 功控后最终麦轮指令标称量（发送边界再乘电机方向）
+    float current_wheel_temp[4]{}; // M3508 电调反馈温度 ℃
+
+    // ---- 四麦轮模型功控中间量（仅作用于麦轮，不影响履带/腿）----
+    float    wheel_cmd_before_power_ctrl[4]{}; // 麦轮 PID 原始输出
+    float    wheel_cmd_after_power_ctrl[4]{};  // 功控缩放/滤波后的输出
+    float    wheel_power_predict_w[4]{};       // 各麦轮模型预测功率 W
+    float    wheel_power_scale[4]{};           // after/before，便于观察限幅比例
+    float    wheel_power_total_w{};            // 四麦轮预测总功率 W
+    float    wheel_power_limit_w{};            // 当前生效总功率上限 W
+    float    wheel_power_buffer_energy_j{};    // 当前功控使用的缓冲能量 J
+    bool     wheel_power_control_active{};     // 本周期是否有麦轮指令被明显缩放
 
     // ---- 2 个履带（索引 [0]=L, [1]=R）----
     bool  track_online[2]{};
@@ -146,6 +162,12 @@ struct engineer_data_ctx_t
     float imu_pitch{};
     float imu_roll_raw{};
     float imu_roll{};
+
+    // ---- 0x212 CAN 功率计（标定采集；当前不做功率限制输出）----
+    float    power_meter_w{};       // 功率计解析功率 W
+    float    power_meter_current{}; // 功率计电流 A
+    float    power_meter_voltage{}; // 功率计电压 V
+    uint32_t power_meter_rx_count{}; // 成功解析帧数，用于判断 CAN 接收是否存活
 };
 
 // 完整上下文
@@ -153,6 +175,9 @@ struct engineer_context_t
 {
     engineer_deps_t::motor_deps_t motor;
     engineer_deps_t::pid_deps_t   pid;
+    powermeter_drv_t             *powermeter{nullptr};
+    powermeter_data               powermeter_feedback{};
+    power_node_t                 *mecanum_power_node[4]{nullptr}; // 四麦轮共用同一组拟合参数
     engineer_data_ctx_t           data;
 
     engineer_cmd_t *cmd{nullptr}; // 当前命令指针
@@ -215,6 +240,8 @@ class engineer_chassis_t final
     // =============================================
     void _kinematics_solve();         // 麦轮逆运动学求解
     void _mecanum_control();          // 麦轮速度环 PID
+    void _mecanum_power_control_init(); // 注册四个麦轮功控节点（共用 FL 标定参数）
+    void _mecanum_power_control();      // 麦轮模型功率限制，仅覆盖麦轮输出
     void _track_control();            // 履带恒速/停止速度环 PID
     void _leg_control();              // 腿控：UP VMC、MID 回零、DOWN 手动
     void _send_motor_command() const; // 发送所有电机指令

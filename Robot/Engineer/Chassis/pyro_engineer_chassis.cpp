@@ -13,6 +13,7 @@
 #include "pyro_algo_common.h"
 #include "pyro_dji_motor_drv.h"
 #include "pyro_ins.h"
+#include "pyro_referee.h"
 
 #include <cmath>
 
@@ -116,11 +117,15 @@ engineer_context_t &engineer_chassis_t::get_ctx()
 status_t engineer_chassis_t::_init()
 {
     // 1. 把外部依赖拷贝到上下文
-    _ctx.motor = _module_deps.motor_deps;
-    _ctx.pid   = _module_deps.pid_deps;
+    _ctx.motor      = _module_deps.motor_deps;
+    _ctx.pid        = _module_deps.pid_deps;
+    _ctx.powermeter = _module_deps.powermeter;
 
     // 2. 混合底盘运动学求解器（4 个独立 K，支持前后轮距非对称）
     _kinematics = new hybrid_kin_t(TRACK_SPACING, K_FL, K_FR, K_BL, K_BR);
+
+    // 3. 四个麦轮注册模型功控节点（共用 FL 标定参数；不作用于履带和腿）
+    _mecanum_power_control_init();
 
     return PYRO_OK;
 }
@@ -143,6 +148,8 @@ void engineer_chassis_t::_update_feedback()
 
         _ctx.data.current_wheel_rpm[i] =
             static_cast<float>(MECANUM_MOTOR_SIGN[i]) * wheel_motor_rpm;
+        _ctx.data.current_wheel_temp[i] =
+            static_cast<float>(_ctx.motor.mecanum[i]->get_temperature());
         _ctx.data.wheel_online[i] = _ctx.motor.mecanum[i]->is_online();
     }
 
@@ -161,6 +168,20 @@ void engineer_chassis_t::_update_feedback()
 
     // ---- 腿部反馈、校准与 IMU ----
     _leg_feedback();
+
+    // ---- 0x212 CAN 功率计：只刷新测量值，不参与当前控制闭环 ----
+    if (_ctx.powermeter != nullptr)
+    {
+        powermeter_data meter_frame{};
+        if (_ctx.powermeter->get_data(meter_frame))
+        {
+            _ctx.powermeter_feedback      = meter_frame;
+            _ctx.data.power_meter_current = meter_frame.current;
+            _ctx.data.power_meter_voltage = meter_frame.voltage;
+            _ctx.data.power_meter_w       = meter_frame.power;
+            ++_ctx.data.power_meter_rx_count;
+        }
+    }
 }
 
 // =========================================================
@@ -255,6 +276,153 @@ void engineer_chassis_t::_mecanum_control()
         else
         {
             _ctx.data.out_wheel_torque[i] = 0.0f;
+        }
+    }
+
+    // PID 原始输出之后、统一 CAN 发送之前进行麦轮专用功率限制。
+    _mecanum_power_control();
+}
+
+// =========================================================
+// _mecanum_power_control_init()：四个麦轮注册同一组标定参数
+// =========================================================
+void engineer_chassis_t::_mecanum_power_control_init()
+{
+    // 四个麦轮共用这一组 FL.csv 拟合参数，作为当前四轮平均模型。
+    constexpr float common_k1 = 0.03806726f; // 机械功率项系数，对应 cmd * rpm
+    constexpr float common_k2 = 0.06338624f; // 铜损/热损耗系数，对应 cmd^2
+    constexpr float common_k3 = 0.00010471f; // 高频摩擦损耗，对应 rpm^2
+    constexpr float common_k4 = 0.00106781f; // 库仑摩擦损耗，对应 |rpm|
+    constexpr float common_k5 = 0.75f;       // 静态基础功耗 W
+    constexpr float common_alpha = 0.00393f; // 铜阻温度修正系数
+
+    // 裁判系统未启用时，缓冲环目标能量和 PID 也直接放在这里初始化。
+    constexpr float buffer_target_energy_j = 60.0f;
+    constexpr float buffer_pid_kp = 0.1f;
+    constexpr float buffer_pid_ki = 0.01f;
+    constexpr float buffer_pid_kd = 0.0f;
+
+    const power_fit_params_t mecanum_common_params{
+        common_k1,
+        common_k2,
+        common_k3,
+        common_k4,
+        common_k5,
+        common_alpha,
+    };
+
+    auto &power_controller = power_controller_t::get_instance();
+    power_controller.config_buffer_loop(
+        buffer_target_energy_j,
+        buffer_pid_kp,
+        buffer_pid_ki,
+        buffer_pid_kd);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        _ctx.mecanum_power_node[i] =
+            power_controller.register_motor(mecanum_common_params);
+    }
+}
+
+// =========================================================
+// _mecanum_power_control()：仅对四个麦轮做模型功率限制
+// =========================================================
+void engineer_chassis_t::_mecanum_power_control()
+{
+    // 麦轮功控运行参数：只作用于 4 个麦轮，不影响履带和腿部。
+    constexpr bool  power_control_en          = true;  // false=旁路，保留麦轮 PID 原始输出
+    constexpr float default_power_limit_w     = 50.0f; // 无裁判系统时的四轮总预测功率上限 W
+    constexpr float default_buffer_energy_j   = 60.0f; // 无裁判系统时的虚拟缓冲能量 J
+    constexpr float scale_valid_cmd_threshold = 0.001f; // 判断实际缩放/介入的最小指令差
+
+    _ctx.data.wheel_power_control_active = false;
+    _ctx.data.wheel_power_total_w        = 0.0f;
+
+    if (!power_control_en)
+    {
+        _ctx.data.wheel_power_limit_w         = 0.0f;
+        _ctx.data.wheel_power_buffer_energy_j = 0.0f;
+        return;
+    }
+
+    float power_limit_w   = default_power_limit_w;
+    float buffer_energy_j = default_buffer_energy_j;
+
+#ifdef REFEREE_UART
+    // 当前 CMake 中 REFEREE_UART 被注释，因此默认走本地 50W/60J。
+    // 启用裁判系统串口后，在线帧有效时自动切换为裁判系统下发值。
+    referee_drv_t *referee = referee_drv_t::get_instance();
+    if (referee != nullptr && referee->is_online())
+    {
+        const referee_data_t &referee_data = referee->get_data();
+
+        if (referee_data.robot_status.chassis_power_limit > 0U)
+        {
+            power_limit_w =
+                static_cast<float>(referee_data.robot_status.chassis_power_limit);
+        }
+        if (referee_data.power_heat.buffer_energy > 0U)
+        {
+            buffer_energy_j =
+                static_cast<float>(referee_data.power_heat.buffer_energy);
+        }
+    }
+#endif
+
+    _ctx.data.wheel_power_limit_w         = power_limit_w;
+    _ctx.data.wheel_power_buffer_energy_j = buffer_energy_j;
+
+    // 1. 填入四个麦轮节点；uncontrolled_cmd=0 表示麦轮 PID 输出全部受控。
+    for (int i = 0; i < 4; ++i)
+    {
+        _ctx.data.wheel_cmd_before_power_ctrl[i] = _ctx.data.out_wheel_torque[i];
+        _ctx.data.wheel_cmd_after_power_ctrl[i]  = _ctx.data.out_wheel_torque[i];
+        _ctx.data.wheel_power_scale[i]            = 1.0f;
+
+        power_node_t *node = _ctx.mecanum_power_node[i];
+        if (node == nullptr)
+        {
+            continue;
+        }
+
+        node->target_cmd       = _ctx.data.out_wheel_torque[i];
+        node->uncontrolled_cmd = 0.0f;
+        node->rpm              = _ctx.data.current_wheel_rpm[i];
+        node->temp             = _ctx.data.current_wheel_temp[i];
+    }
+
+    // 2. 四节点共用一个总功率求解器；cap_extra_power=0，当前不接超容。
+    auto &power_controller = power_controller_t::get_instance();
+    power_controller.solve(power_limit_w, buffer_energy_j, 0.0f);
+
+    // 3. 用安全指令覆盖麦轮 PID 输出；履带和腿部数组完全不在这里处理。
+    for (int i = 0; i < 4; ++i)
+    {
+        power_node_t *node = _ctx.mecanum_power_node[i];
+        if (node == nullptr)
+        {
+            continue;
+        }
+
+        _ctx.data.out_wheel_torque[i]                = node->safe_cmd;
+        _ctx.data.wheel_cmd_after_power_ctrl[i]      = node->safe_cmd;
+        _ctx.data.wheel_power_predict_w[i]           = node->power_predict;
+        _ctx.data.wheel_power_total_w               += node->power_predict;
+
+        const float raw_cmd = _ctx.data.wheel_cmd_before_power_ctrl[i];
+        if (fabsf(raw_cmd) > scale_valid_cmd_threshold)
+        {
+            _ctx.data.wheel_power_scale[i] = node->safe_cmd / raw_cmd;
+        }
+        else
+        {
+            _ctx.data.wheel_power_scale[i] = 1.0f;
+        }
+
+        if (fabsf(node->safe_cmd - raw_cmd) > scale_valid_cmd_threshold)
+        {
+            _ctx.data.wheel_power_control_active = true;
         }
     }
 }

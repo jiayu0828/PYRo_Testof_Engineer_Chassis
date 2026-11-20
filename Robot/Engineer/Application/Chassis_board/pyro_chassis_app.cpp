@@ -15,8 +15,15 @@ extern "C" {
 #include "pyro_dm_motor_drv.h"
 #include "pyro_algo_pid.h"
 #include "pyro_bsp_can.h"
+#include "pyro_powermeter.h"
 
 using namespace pyro;
+
+/* ====================== 标定设备配置 ====================== */
+// 当前测试接线：0x212 功率计的 CAN 通信线临时接在腿电机所在 CAN1。
+// 功率输入回路接左前轮 M3508 电调；CAN 只负责读取功率计测量帧。
+static constexpr uint32_t              POWER_METER_CAN_ID = 0x212U;
+static constexpr bsp_can::which_can    POWER_METER_CAN    = bsp_can::can1;
 
 /* ====================== 全局指针 ====================== */
 static engineer_chassis_t *s_chassis = nullptr;
@@ -92,6 +99,14 @@ static void deps_init()
         dm->set_torque_range(-LEG_MAX_TORQUE, LEG_MAX_TORQUE);
         dm->set_runtime_kp(0.0f);
         dm->set_runtime_kd(0.0f);
+    }
+
+    /* ---------- 0x212 CAN 功率计（只读标定，不接入功率闭环） ---------- */
+    s_deps->powermeter = new powermeter_drv_t(POWER_METER_CAN_ID, POWER_METER_CAN);
+    if (s_deps->powermeter->init() != PYRO_OK)
+    {
+        delete s_deps->powermeter;
+        s_deps->powermeter = nullptr;
     }
 
     /* ---------- 腿双环 PID  ---------- */

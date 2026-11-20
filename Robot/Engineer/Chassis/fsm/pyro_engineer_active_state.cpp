@@ -9,10 +9,20 @@ namespace pyro
 void engineer_chassis_t::state_active_t::enter(owner *owner)
 {
     // 电机使能由 execute 中的 _apply_motor_enable 按右拨杆统一管理；
-    // 这里只清空 PID，避免切换瞬间积分突变导致抽搐
-    for (auto *pid : owner->_ctx.pid.mecanum_pid)
+    // 这里清空 PID 和麦轮功控滤波状态，避免切换瞬间积分/旧缩放值导致抽搐。
+    for (int i = 0; i < 4; ++i)
     {
-        if (pid) pid->clear();
+        if (owner->_ctx.pid.mecanum_pid[i])
+        {
+            owner->_ctx.pid.mecanum_pid[i]->clear();
+        }
+        if (owner->_ctx.mecanum_power_node[i] != nullptr)
+        {
+            auto *power_node = owner->_ctx.mecanum_power_node[i];
+            power_node->target_cmd          = 0.0f;
+            power_node->safe_cmd            = 0.0f;
+            power_node->last_controlled_cmd = 0.0f;
+        }
     }
     for (auto *pid : owner->_ctx.pid.track_pid)
     {

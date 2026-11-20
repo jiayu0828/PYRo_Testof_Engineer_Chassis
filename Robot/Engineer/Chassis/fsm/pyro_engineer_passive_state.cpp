@@ -17,8 +17,21 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     {
         owner->_ctx.data.target_wheel_rpm[i] = 0.0f;
         owner->_ctx.data.out_wheel_torque[i] = 0.0f;
+        owner->_ctx.data.wheel_cmd_before_power_ctrl[i] = 0.0f;
+        owner->_ctx.data.wheel_cmd_after_power_ctrl[i]  = 0.0f;
+        owner->_ctx.data.wheel_power_scale[i]           = 1.0f;
         owner->_mec_en_state[i] = false;
+
+        if (owner->_ctx.mecanum_power_node[i] != nullptr)
+        {
+            auto *power_node = owner->_ctx.mecanum_power_node[i];
+            power_node->target_cmd          = 0.0f;
+            power_node->safe_cmd            = 0.0f;
+            power_node->last_controlled_cmd = 0.0f;
+        }
     }
+    owner->_ctx.data.wheel_power_total_w        = 0.0f;
+    owner->_ctx.data.wheel_power_control_active = false;
     for (auto *pid : owner->_ctx.pid.mecanum_pid)
     {
         if (pid) pid->clear();
