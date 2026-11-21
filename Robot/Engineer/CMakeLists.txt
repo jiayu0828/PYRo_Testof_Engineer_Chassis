@@ -29,6 +29,11 @@ pyro_mission_planner.cpp
 Chassis/pyro_engineer_chassis.cpp
 Chassis/fsm/pyro_engineer_active_state.cpp
 Chassis/fsm/pyro_engineer_passive_state.cpp
+Chassis/fsm/leg/pyro_engineer_leg_disabled_state.cpp
+Chassis/fsm/leg/pyro_engineer_leg_uncalibrated_state.cpp
+Chassis/fsm/leg/pyro_engineer_leg_vmc_state.cpp
+Chassis/fsm/leg/pyro_engineer_leg_pid_gravity_state.cpp
+Chassis/fsm/leg/pyro_engineer_leg_pid_home_state.cpp
 Application/Chassis_board/pyro_chassis_app.cpp
 Application/Chassis_board/pyro_chassis_debug.cpp
 Communication/Chassis_board/pyro_chassis_remote.cpp
@@ -47,16 +52,19 @@ if (BOARD STREQUAL "ARM_BOARD")
     )
 elseif (BOARD STREQUAL "CHASSIS_BOARD")
     target_sources(Engineer PRIVATE ${BASE_SOURCES} ${CHASSIS_EXTRA_SOURCES})
+    # SUPERCAP_UART 同时作用于 PYRo 库内的驱动实现和 Engineer 侧调用。
     target_compile_definitions(PYRo PUBLIC
     DR16_UART=PYRO_UART5
+    SUPERCAP_UART=PYRO_UART7
     )
     target_compile_definitions(Engineer PRIVATE
     DR16_UART=PYRO_UART5
+    SUPERCAP_UART=PYRO_UART7
     #SUPER_CAP_UART=PYRO_UART1
     DEBUG_UART=PYRO_UART1
     #这两个UART灵活变通一下
-    #REFEREE_UART=PYRO_UART10
-    #INTERBOARD_UART=PYRO_UART7
+    #REFEREE_UART=PYRO_UART7
+    #INTERBOARD_UART=PYRO_UART10
     )
 else()
         message(FATAL_ERROR "Unknown BOARD type: ${BOARD}. Please set BOARD to either ARM_BOARD or CHASSIS_BOARD.")

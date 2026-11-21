@@ -64,6 +64,7 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
         owner->_ctx.data.target_leg_radps[i] = 0.0f;
         owner->_ctx.data.out_leg_torque[i]         = 0.0f;
         owner->_ctx.data.out_leg_gravity_torque[i] = 0.0f;
+        owner->_ctx.data.leg_alpha[i]              = 0.0f;
         owner->_ctx.data.leg_j_dynamic[i]          = 0.0f;
         owner->_ctx.data.leg_gravity_valid[i]      = false;
         owner->_ctx.data.leg_tau_wall[i]           = 0.0f;
@@ -73,13 +74,12 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
         owner->_ctx.data.leg_tau_manual_pid[i]     = 0.0f;
         owner->_ctx.data.leg_control_mode[i]       = 0.0f;
         owner->_leg_target_smooth[i]               = 0.0f;
+        owner->_leg_zero_interp_init[i]            = false;
         owner->_leg_manual_map_active[i]           = false;
         owner->_leg_manual_cmd_offset[i]           = 0.0f;
-        owner->_leg_last_logic_torque[i]             = 0.0f;
-        owner->_leg_en_state[i]                      = false;
+        owner->_leg_last_logic_torque[i]           = 0.0f;
+        owner->_leg_en_state[i]                    = false;
     }
-    owner->_leg_vmc_prev  = false;
-    owner->_leg_home_prev = false;
     owner->_ctx.data.att_force_pitch = 0.0f;
     owner->_ctx.data.att_force_roll  = 0.0f;
     for (auto *pid : owner->_ctx.pid.leg_pos_pid)
@@ -107,6 +107,7 @@ void engineer_chassis_t::state_passive_t::execute(owner *owner)
         owner->_ctx.data.out_track_torque[i] = 0.0f;
         owner->_ctx.data.out_leg_torque[i]   = 0.0f;
     }
+    owner->_supercap_control();
     owner->_send_motor_command();
 }
 

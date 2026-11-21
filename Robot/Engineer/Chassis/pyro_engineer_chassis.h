@@ -6,6 +6,7 @@
 #include "pyro_motor_base.h"
 #include "pyro_powermeter.h"
 #include "pyro_power_control.h"
+#include "pyro_supercap_drv.h"
 #include "pyro_kin_hybrid.h" // 混合底盘运动学（麦轮速度解算，支持非对称独立 K）
 #include "engineer_config.h"
 
@@ -36,8 +37,8 @@ struct leg_cmd_t
 {
     bool  en;            // 腿使能（右拨杆 UP）
     bool  calibrate;     // 校准脉冲（右拨杆进入 UP 的那一帧为 true）
-    bool  home_to_zero;  // 左拨杆 MID：双环 PID 固定控制回校准零点
-    float target_theta;  // 左拨杆 DOWN 手动目标相对电机角（右摇杆 ry，两腿同步）
+    bool  home_to_zero;  // 历史字段名；当前=true 表示左拨杆 MID：手动双环 PID + 重力/软墙前馈
+    float target_theta;  // 左拨杆 MID 右摇杆手动目标相对电机角（两腿同步）
 };
 
 // --- 总命令结构体 ---
@@ -50,10 +51,10 @@ struct engineer_cmd_t final : public cmd_base_t
     bool mecanum_en;   // 麦轮使能（右拨杆 MID/UP）
     bool track_en;     // 履带电机使能（右拨杆 UP）
 
-    // 左拨杆档位组合：
-    // UP   = 履带恒速 + 腿部重力 VMC/Pitch/Roll 补偿；
-    // MID  = 履带停止 + 腿部双环 PID 回零（home_to_zero）；
-    // DOWN = 履带停止 + 腿部右摇杆手动控制。
+    // 左拨杆档位组合（底盘内部腿控 HFSM 据此分流，通信层字段名暂时保留）：
+    // UP   = 履带恒速 + 腿部 VMC（重力/软墙/Pitch/Roll 姿态力）；
+    // MID  = 履带停止 + 右摇杆手动双环 PID + 重力/软墙前馈；
+    // DOWN = 履带停止 + 限速回零纯双环 PID。
     bool track_run;
 
     engineer_cmd_t()
@@ -138,10 +139,10 @@ struct engineer_data_ctx_t
     float leg_theta_cal[2]{};         // 校准时的电机多圈角基准
     float current_leg_theta[2]{};     // 相对电机角（校准点为 0，rad）
     float current_leg_radps[2]{};     // 电机输出轴角速度 rad/s
-    float target_leg_theta[2]{};      // 目标相对电机角：MID=0，DOWN 来自右摇杆映射
+    float target_leg_theta[2]{};      // 目标相对电机角：MID 来自摇杆映射，DOWN 为限速回零参考
     float target_leg_radps[2]{};      // 位置环输出的目标角速度
     float out_leg_torque[2]{};        // 最终输出逻辑力矩 N·m
-    float out_leg_gravity_torque[2]{}; // UP/VMC 重力力矩（q 逻辑坐标系，N·m）；MID/DOWN 为 0
+    float out_leg_gravity_torque[2]{}; // UP/MID 重力前馈力矩（q 逻辑坐标系，N·m）；DOWN 纯 PID 时为 0
     bool  leg_calibrated[2]{};        // 是否已校准
 
     // ---- 腿部 VMC/调试中间量（供 JustFloat 和 Live Watch 核查）----
@@ -150,10 +151,10 @@ struct engineer_data_ctx_t
     float leg_j_dynamic[2]{};       // 当前姿态下的动态雅可比标量
     float leg_tau_wall[2]{};        // q 空间软墙力矩 N·m
     float leg_tau_damping[2]{};     // q 空间主动阻尼力矩 N·m
-    float leg_ff_scale[2]{};        // 重力前馈缩放系数
-    float leg_tau_manual_pid[2]{};  // 手动双环 PID 输出力矩 N·m
+    float leg_ff_scale[2]{};        // 重力/软墙前馈投入标志（1=投入，0=纯 PID）
+    float leg_tau_manual_pid[2]{};  // MID/DOWN 双环 PID 输出力矩 N·m（字段名保留以便观察）
     float leg_tau_attitude[2]{};    // Pitch/Roll 姿态 PID 映射后的 q 帧力矩 N·m
-    float leg_control_mode[2]{};    // 0=失能，1=DOWN 手动，2=UP VMC，3=MID 双环回零
+    float leg_control_mode[2]{};    // 0=失能/未校准，1=DOWN 纯双环回零，2=UP VMC，3=MID 双环+重力前馈
     float att_force_pitch{};        // Pitch PID 输出的任务空间虚拟力 N
     float att_force_roll{};         // Roll PID 输出的左右差动力 N
 
@@ -168,6 +169,20 @@ struct engineer_data_ctx_t
     float    power_meter_current{}; // 功率计电流 A
     float    power_meter_voltage{}; // 功率计电压 V
     uint32_t power_meter_rx_count{}; // 成功解析帧数，用于判断 CAN 接收是否存活
+
+    // ---- UART 超级电容板（只参与四轮麦轮功控，不控制履带/腿）----
+    bool     supercap_online{};               // 电容板串口协议在线
+    bool     supercap_cmd_use_cap{};          // 最近一次发送给电容板的 use_cap
+    bool     supercap_output_enabled{};       // 使能延时完成，正在周期发送 use_cap=1
+    bool     supercap_extra_power_allowed{};  // 在线且电压滞回允许向功控加功率
+    float    supercap_extra_power_w{};        // 本周期传入 solve() 的额外功率 W
+    float    supercap_cap_power_raw{};        // 电容充放电功率原始值（协议未另做缩放）
+    float    supercap_chassis_power_raw{};    // 电容板 ADC 底盘功率原始值
+    float    supercap_voltage_cv{};           // 电容电压原始值；参考工程按 0.01 V 口径使用
+    uint8_t  supercap_error_flag{};           // 电容板故障标志
+    uint8_t  supercap_low_flag{};             // 低电量标志
+    uint8_t  supercap_over_current_flag{};    // 过流/额定电流标志
+    uint32_t supercap_tx_count{};             // 成功发送命令帧计数
 };
 
 // 完整上下文
@@ -177,6 +192,8 @@ struct engineer_context_t
     engineer_deps_t::pid_deps_t   pid;
     powermeter_drv_t             *powermeter{nullptr};
     powermeter_data               powermeter_feedback{};
+    supercap_drv_t::chassis_cmd_t supercap_tx_cmd{};
+    supercap_drv_t::cap_feedback_t supercap_rx_feedback{};
     power_node_t                 *mecanum_power_node[4]{nullptr}; // 四麦轮共用同一组拟合参数
     engineer_data_ctx_t           data;
 
@@ -242,8 +259,27 @@ class engineer_chassis_t final
     void _mecanum_control();          // 麦轮速度环 PID
     void _mecanum_power_control_init(); // 注册四个麦轮功控节点（共用 FL 标定参数）
     void _mecanum_power_control();      // 麦轮模型功率限制，仅覆盖麦轮输出
+    void _supercap_control();           // 电容板命令组装、使能状态机和周期发送
     void _track_control();            // 履带恒速/停止速度环 PID
-    void _leg_control();              // 腿控：UP VMC、MID 回零、DOWN 手动
+
+    // =============================================
+    // 腿部控制辅助函数：腿部 HFSM 状态类位于 Chassis/fsm/leg/*.cpp
+    // ---------------------------------------------
+    // 这里保留机构算法和输出处理；各状态的 enter/execute/exit
+    // 按 Hero 风格放在独立状态文件中，由 _leg_fsm 统一调度。
+    // =============================================
+    void _leg_handle_disabled(int i);
+    void _leg_handle_uncalibrated(int i);
+    void _leg_enter_active_mode(int i, float current_q);
+    void _leg_update_vmc_feedforward(int i, float q, float qdot, float pitch,
+                                     bool include_attitude,
+                                     float f_pitch, float f_roll);
+    void _leg_clear_feedforward(int i);
+    void _leg_update_manual_target(int i, float stick_cmd);
+    void _leg_update_home_target(int i, float current_q);
+    float _leg_run_dual_pid(int i);
+    void _leg_apply_common_output(int i, float raw_torque, float qdot);
+    void _leg_control();              // 腿部 active 子 HFSM 协调入口
     void _send_motor_command() const; // 发送所有电机指令
 
     // 麦轮混合运动学求解器
@@ -260,9 +296,7 @@ class engineer_chassis_t final
     bool  _imu_lpf_init{false};
 
     float _leg_target_smooth[2]{};      // 送入位置环的平滑参考角
-    bool  _leg_zero_interp_init[2]{};   // 固定 0 回零分支插值参考已从当前角初始化
-    bool  _leg_vmc_prev{false};         // 上一帧左拨杆 UP/VMC 模式，用于模式边沿清环
-    bool  _leg_home_prev{false};        // 上一帧 home_to_zero 模式，用于进入时清环
+    bool  _leg_zero_interp_init[2]{};   // DOWN 限速回零参考已从当前角初始化
     bool  _leg_manual_map_active[2]{};  // MID 首次下推摇杆后的基准映射状态
     float _leg_manual_cmd_offset[2]{};  // MID 摇杆量到平滑目标的映射偏置
     float _leg_last_logic_torque[2]{};  // 上一帧最终逻辑力矩，用于斜率限制
@@ -289,10 +323,56 @@ class engineer_chassis_t final
         void exit(owner *owner) override;
     };
 
-    // 状态实例
+    // 顶层 FSM 状态实例（实现见 Chassis/fsm/pyro_engineer_*_state.cpp）
     state_passive_t _state_passive;
     state_active_t  _state_active;
     fsm_t<owner>    _main_fsm;
+
+    // =============================================
+    // active 内部腿部 HFSM
+    // 状态实现按 Hero 风格拆分到 Chassis/fsm/leg/*.cpp
+    // =============================================
+    struct leg_state_disabled_t final : public state_t<owner>
+    {
+        void enter(owner *chassis) override;
+        void execute(owner *chassis) override;
+        void exit(owner *chassis) override;
+    };
+
+    struct leg_state_uncalibrated_t final : public state_t<owner>
+    {
+        void enter(owner *chassis) override;
+        void execute(owner *chassis) override;
+        void exit(owner *chassis) override;
+    };
+
+    struct leg_state_vmc_t final : public state_t<owner>
+    {
+        void enter(owner *chassis) override;
+        void execute(owner *chassis) override;
+        void exit(owner *chassis) override;
+    };
+
+    struct leg_state_pid_gravity_t final : public state_t<owner>
+    {
+        void enter(owner *chassis) override;
+        void execute(owner *chassis) override;
+        void exit(owner *chassis) override;
+    };
+
+    struct leg_state_pid_home_t final : public state_t<owner>
+    {
+        void enter(owner *chassis) override;
+        void execute(owner *chassis) override;
+        void exit(owner *chassis) override;
+    };
+
+    leg_state_disabled_t     _leg_state_disabled;
+    leg_state_uncalibrated_t _leg_state_uncalibrated;
+    leg_state_vmc_t          _leg_state_vmc;
+    leg_state_pid_gravity_t  _leg_state_pid_gravity;
+    leg_state_pid_home_t     _leg_state_pid_home;
+    fsm_t<owner>             _leg_fsm;
 };
 
 } // namespace pyro

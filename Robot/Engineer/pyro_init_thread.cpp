@@ -1,12 +1,13 @@
 #include "pyro_bsp_uart.h"
 #include "pyro_bsp_can.h"
+#include "pyro_core_config.h"
 #include "pyro_dwt_drv.h"
 #include "pyro_dr16_rc_drv.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pyro_referee.h"
 #include "pyro_ins.h"
-
+#include "pyro_supercap_drv.h"
 namespace pyro
 {
 
@@ -57,7 +58,13 @@ void pyro_init_thread(void *argument)
     REFEREE_UART.enable_rx_dma();
     referee_drv_t::get_instance()->init();
 #endif
-
+#ifdef SUPERCAP_UART
+    // 超级电容板固定 115200 8N1；start_rx() 只启动协议任务，不负责串口参数初始化。
+    SUPERCAP_UART.reset(115200, UART_WORDLENGTH_8B, UART_STOPBITS_1,
+                        UART_PARITY_NONE);
+    SUPERCAP_UART.enable_rx_dma();
+    supercap_drv_t::get_instance()->start_rx();
+#endif
     /* DR16 遥控器：UART5，100000 波特率、9 位、2 停止位、偶校验 */
 #ifdef DR16_UART
     dr16_drv_t::instance().start();

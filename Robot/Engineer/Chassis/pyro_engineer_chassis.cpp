@@ -80,18 +80,8 @@ static constexpr float LEG_IMU_LPF_ALPHA = 0.15f;
 // module_base 控制任务使用 vTaskDelayUntil 固定 1 ms 周期；插值按标称 dt 计算。
 static constexpr float LEG_CONTROL_DT_S = 0.001f;
 
-// =========================================================
-// 腿部 Pitch/Roll 姿态环运行参数
-// ---------------------------------------------------------
-// PID 的 Kp/Ki/Kd、积分/输出限幅和滤波参数在
-// pyro_chassis_app.cpp 的 pitch_pid/roll_pid 构造函数中。
-// 当前 pid_t 类不保存目标角和输出极性，因此这些运行参数放在
-// 实际调用 calculate() 的控制文件顶部，避免散落到全局 config。
-// =========================================================
-static constexpr bool  LEG_ATTITUDE_PID_EN  = true;
-static constexpr float LEG_TARGET_PITCH_RAD = 0.00f;
-static constexpr float LEG_TARGET_ROLL_RAD  = 0.0f;
-
+// 腿部 Pitch/Roll 姿态环使能与目标角已下沉到 engineer_config.h，
+// 供 Chassis/fsm/leg/ 下的 VMC 状态文件直接使用。
 
 // =========================================================
 // 构造函数
@@ -182,6 +172,26 @@ void engineer_chassis_t::_update_feedback()
             ++_ctx.data.power_meter_rx_count;
         }
     }
+
+#ifdef SUPERCAP_UART
+    // ---- 超级电容板：驱动任务完成 CRC/解包，控制任务只拷贝最新帧 ----
+    supercap_drv_t *supercap = supercap_drv_t::get_instance();
+    if (supercap != nullptr)
+    {
+        _ctx.supercap_rx_feedback = supercap->get_feedback();
+        const auto &cap_fb        = _ctx.supercap_rx_feedback;
+
+        _ctx.data.supercap_online            = supercap->check_online();
+        _ctx.data.supercap_cap_power_raw     = static_cast<float>(cap_fb.cap_power_cap);
+        _ctx.data.supercap_chassis_power_raw = static_cast<float>(cap_fb.chassis_power_cap);
+        _ctx.data.supercap_voltage_cv        = static_cast<float>(cap_fb.vot_cap);
+        _ctx.data.supercap_error_flag        = cap_fb.error_flag;
+        _ctx.data.supercap_low_flag          = cap_fb.cap_low_flag;
+        _ctx.data.supercap_over_current_flag = cap_fb.over_normal_c_l;
+    }
+#else
+    _ctx.data.supercap_online = false;
+#endif
 }
 
 // =========================================================
@@ -336,8 +346,10 @@ void engineer_chassis_t::_mecanum_power_control()
     constexpr float default_buffer_energy_j   = 60.0f; // 无裁判系统时的虚拟缓冲能量 J
     constexpr float scale_valid_cmd_threshold = 0.001f; // 判断实际缩放/介入的最小指令差
 
-    _ctx.data.wheel_power_control_active = false;
-    _ctx.data.wheel_power_total_w        = 0.0f;
+    _ctx.data.wheel_power_control_active  = false;
+    _ctx.data.wheel_power_total_w         = 0.0f;
+    _ctx.data.supercap_extra_power_allowed = false;
+    _ctx.data.supercap_extra_power_w       = 0.0f;
 
     if (!power_control_en)
     {
@@ -350,7 +362,6 @@ void engineer_chassis_t::_mecanum_power_control()
     float buffer_energy_j = default_buffer_energy_j;
 
 #ifdef REFEREE_UART
-    // 当前 CMake 中 REFEREE_UART 被注释，因此默认走本地 50W/60J。
     // 启用裁判系统串口后，在线帧有效时自动切换为裁判系统下发值。
     referee_drv_t *referee = referee_drv_t::get_instance();
     if (referee != nullptr && referee->is_online())
@@ -392,11 +403,43 @@ void engineer_chassis_t::_mecanum_power_control()
         node->temp             = _ctx.data.current_wheel_temp[i];
     }
 
-    // 2. 四节点共用一个总功率求解器；cap_extra_power=0，当前不接超容。
-    auto &power_controller = power_controller_t::get_instance();
-    power_controller.solve(power_limit_w, buffer_energy_j, 0.0f);
+    // 2. 超级电容额外功率口径：
+    //    电容板在线、状态机已周期发送 use_cap=1，且电容电压高于使能门限后，
+    //    才给四轮麦轮功控放宽一个固定功率；电压低于回差门限立即收回。
+    constexpr bool  supercap_extra_power_en       = true;
+    constexpr float supercap_extra_power_w        = 80.0f; // 参考小坦 Hero 保守值，实车再标定
+    constexpr float supercap_enable_voltage_cv    = 1900.0f; // 19.00 V
+    constexpr float supercap_disable_voltage_cv   = 1750.0f; // 17.50 V，滞回防抖
+    static bool     supercap_voltage_ready        = false;
 
-    // 3. 用安全指令覆盖麦轮 PID 输出；履带和腿部数组完全不在这里处理。
+    if (!supercap_extra_power_en || !_ctx.data.supercap_online ||
+        !_ctx.data.supercap_output_enabled)
+    {
+        supercap_voltage_ready = false;
+    }
+    else if (_ctx.data.supercap_voltage_cv >= supercap_enable_voltage_cv)
+    {
+        supercap_voltage_ready = true;
+    }
+    else if (_ctx.data.supercap_voltage_cv <= supercap_disable_voltage_cv)
+    {
+        supercap_voltage_ready = false;
+    }
+
+    const float cap_extra_power_w =
+        (supercap_extra_power_en && _ctx.data.supercap_online &&
+         _ctx.data.supercap_output_enabled && supercap_voltage_ready)
+            ? supercap_extra_power_w
+            : 0.0f;
+
+    _ctx.data.supercap_extra_power_allowed = cap_extra_power_w > 0.0f;
+    _ctx.data.supercap_extra_power_w       = cap_extra_power_w;
+
+    // 3. 四节点共用一个总功率求解器；第三参为电容端允许补充的总功率 W。
+    auto &power_controller = power_controller_t::get_instance();
+    power_controller.solve(power_limit_w, buffer_energy_j, cap_extra_power_w);
+
+    // 4. 用安全指令覆盖麦轮 PID 输出；履带和腿部数组完全不在这里处理。
     for (int i = 0; i < 4; ++i)
     {
         power_node_t *node = _ctx.mecanum_power_node[i];
@@ -425,6 +468,130 @@ void engineer_chassis_t::_mecanum_power_control()
             _ctx.data.wheel_power_control_active = true;
         }
     }
+}
+
+// =========================================================
+// _supercap_control()：超级电容板命令组装、使能状态机和周期发送
+// 主动/被动 FSM 都调用：主动状态满足条件后使能电容，被动状态延时发 use_cap=0。
+// =========================================================
+void engineer_chassis_t::_supercap_control()
+{
+#ifdef SUPERCAP_UART
+    // 状态机参数内聚在函数内，避免再往 config.h 增加零散宏。
+    constexpr bool     supercap_tx_en           = true;
+    constexpr uint32_t enable_delay_ticks       = 1000U; // 1 kHz 控制任务：约 1 s 后使能
+    constexpr uint32_t refresh_ticks            = 10U;   // 10 ms 周期保活发送
+    constexpr uint32_t disable_debounce_ticks    = 30U;   // 失能去抖 30 ms
+    constexpr uint8_t  tx_buffer_limit_energy_j = 60U;   // 给电容板的缓冲能量上限 byte
+    constexpr float    tx_byte_max_f             = 255.0f;
+
+    static bool     cap_enabled   = false;
+    static uint32_t enable_timer  = 0;
+    static uint32_t refresh_timer = 0;
+    static uint32_t disable_timer = 0;
+
+    supercap_drv_t *supercap = supercap_drv_t::get_instance();
+    const bool cap_online = (supercap != nullptr) && supercap->check_online();
+
+    // 当前未启用裁判串口：本地以主动 FSM + 麦轮使能作为允许电容参与的安全条件。
+    const bool chassis_armed =
+        (_ctx.cmd != nullptr) &&
+        (_ctx.cmd->mode == cmd_base_t::mode_t::ACTIVE) &&
+        _ctx.cmd->mecanum_en;
+
+    // power_referee 是裁判系统实测底盘功率；当前工程未接裁判串口，固定填 0。
+    // 电容板自身还有 chassis_power_cap ADC 反馈可用于观察。
+    _ctx.supercap_tx_cmd.power_referee              = 0U;
+    _ctx.supercap_tx_cmd.power_buffer_limit_referee = tx_buffer_limit_energy_j;
+    _ctx.supercap_tx_cmd.kill_chassis_user          = 0U;
+    _ctx.supercap_tx_cmd.speed_up_user_now          = 0U;
+
+    if (chassis_armed)
+    {
+        const float tx_power_limit_w = fminf(
+            fmaxf(_ctx.data.wheel_power_limit_w, 0.0f), tx_byte_max_f);
+        const float tx_buffer_energy_j = fminf(
+            fmaxf(_ctx.data.wheel_power_buffer_energy_j, 0.0f), tx_byte_max_f);
+
+        _ctx.supercap_tx_cmd.power_limit_referee =
+            static_cast<uint8_t>(lroundf(tx_power_limit_w));
+        _ctx.supercap_tx_cmd.power_buffer_referee =
+            static_cast<uint8_t>(lroundf(tx_buffer_energy_j));
+    }
+    else
+    {
+        _ctx.supercap_tx_cmd.power_limit_referee  = 0U;
+        _ctx.supercap_tx_cmd.power_buffer_referee = 0U;
+    }
+
+    const bool enable_request = supercap_tx_en && cap_online && chassis_armed;
+
+    if (enable_request)
+    {
+        disable_timer = 0U;
+
+        if (!cap_enabled)
+        {
+            refresh_timer = 0U;
+            if (++enable_timer >= enable_delay_ticks)
+            {
+                enable_timer = 0U;
+                cap_enabled  = true;
+                _ctx.supercap_tx_cmd.use_cap = 1U;
+
+                if (supercap->send_cmd(_ctx.supercap_tx_cmd) == PYRO_OK)
+                {
+                    ++_ctx.data.supercap_tx_count;
+                }
+            }
+        }
+        else if (++refresh_timer >= refresh_ticks)
+        {
+            refresh_timer = 0U;
+            _ctx.supercap_tx_cmd.use_cap = 1U;
+
+            if (supercap->send_cmd(_ctx.supercap_tx_cmd) == PYRO_OK)
+            {
+                ++_ctx.data.supercap_tx_count;
+            }
+        }
+    }
+    else
+    {
+        enable_timer  = 0U;
+        refresh_timer = 0U;
+
+        if (cap_enabled)
+        {
+            if (++disable_timer >= disable_debounce_ticks)
+            {
+                disable_timer = 0U;
+                cap_enabled   = false;
+                _ctx.supercap_tx_cmd.use_cap = 0U;
+
+                if (supercap != nullptr &&
+                    supercap->send_cmd(_ctx.supercap_tx_cmd) == PYRO_OK)
+                {
+                    ++_ctx.data.supercap_tx_count;
+                }
+            }
+        }
+        else
+        {
+            disable_timer = 0U;
+            _ctx.supercap_tx_cmd.use_cap = 0U;
+        }
+    }
+
+    _ctx.data.supercap_output_enabled = cap_enabled;
+    _ctx.data.supercap_cmd_use_cap    = _ctx.supercap_tx_cmd.use_cap;
+#else
+    _ctx.data.supercap_online               = false;
+    _ctx.data.supercap_output_enabled       = false;
+    _ctx.data.supercap_cmd_use_cap          = 0U;
+    _ctx.data.supercap_extra_power_allowed = false;
+    _ctx.data.supercap_extra_power_w       = 0.0f;
+#endif
 }
 
 // =========================================================
@@ -582,306 +749,288 @@ void engineer_chassis_t::_leg_feedback()
 }
 
 // =========================================================
-// _leg_control()：腿控制
-// 1. 左拨杆 UP：履带恒速联动，腿部执行重力 VMC + Pitch/Roll 姿态补偿 + 阻尼/软墙。
-// 2. 左拨杆 DOWN：履带停止，腿部保留右摇杆增量映射的手动双环。
-// 3. 左拨杆 MID：履带停止，腿部只由位置/速度双环 PID 控制回校准零点。
-
+// 腿部机构算法辅助函数
+// ---------------------------------------------------------
+// Hero 风格的状态 enter/execute/exit 拆分在 Chassis/fsm/leg/*.cpp；
+// 本文件只保留可复用的机构计算、目标生成和输出限幅函数。
 // =========================================================
-void engineer_chassis_t::_leg_control()
+
+// 腿失能：输出和积分全部清零，重新使能时不会携带旧力矩或积分冲击。
+void engineer_chassis_t::_leg_handle_disabled(int i)
 {
-    const float pitch     = _ctx.data.imu_pitch;
-    const float roll      = _ctx.data.imu_roll;
-    const bool  vmc_mode  = _ctx.cmd->track_run;
-    const bool  home_mode = _ctx.cmd->leg.home_to_zero;
+    _ctx.data.target_leg_theta[i]       = 0.0f;
+    _ctx.data.target_leg_radps[i]       = 0.0f;
+    _ctx.data.out_leg_torque[i]         = 0.0f;
+    _ctx.data.out_leg_gravity_torque[i] = 0.0f;
+    _ctx.data.leg_alpha[i]              = 0.0f;
+    _ctx.data.leg_gravity_valid[i]      = false;
+    _ctx.data.leg_j_dynamic[i]          = 0.0f;
+    _ctx.data.leg_tau_wall[i]           = 0.0f;
+    _ctx.data.leg_tau_damping[i]        = 0.0f;
+    _ctx.data.leg_ff_scale[i]           = 0.0f;
+    _ctx.data.leg_tau_manual_pid[i]     = 0.0f;
+    _ctx.data.leg_tau_attitude[i]       = 0.0f;
+    _ctx.data.leg_control_mode[i]       = 0.0f;
 
-    // Pitch/Roll PID 输出的是整机任务空间虚拟力，必须在两腿循环外只计算一次。
-    const bool legs_ready =
-        _ctx.data.leg_calibrated[0] && _ctx.data.leg_calibrated[1];
-    const bool attitude_active =
-        LEG_ATTITUDE_PID_EN && vmc_mode && _ctx.cmd->leg.en && legs_ready &&
-        _ctx.pid.pitch_pid != nullptr && _ctx.pid.roll_pid != nullptr;
+    _leg_target_smooth[i]         = 0.0f;
+    _leg_zero_interp_init[i]      = false;
+    _leg_manual_map_active[i]     = false;
+    _leg_manual_cmd_offset[i]     = 0.0f;
+    _leg_last_logic_torque[i]     = 0.0f;
 
-    float f_pitch = 0.0f;
-    float f_roll  = 0.0f;
+    if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
+    if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
+}
 
-    if (attitude_active)
+// 已使能但未校准：不输出力矩，等待右拨杆进入 UP 的边沿执行软件置零。
+void engineer_chassis_t::_leg_handle_uncalibrated(int i)
+{
+    _ctx.data.out_leg_torque[i]         = 0.0f;
+    _ctx.data.out_leg_gravity_torque[i] = 0.0f;
+    _ctx.data.leg_alpha[i]              = 0.0f;
+    _ctx.data.leg_gravity_valid[i]      = false;
+    _ctx.data.leg_j_dynamic[i]          = 0.0f;
+    _ctx.data.leg_tau_wall[i]           = 0.0f;
+    _ctx.data.leg_tau_damping[i]        = 0.0f;
+    _ctx.data.leg_ff_scale[i]           = 0.0f;
+    _ctx.data.leg_tau_manual_pid[i]     = 0.0f;
+    _ctx.data.leg_tau_attitude[i]       = 0.0f;
+    _ctx.data.leg_control_mode[i]       = 0.0f;
+    _leg_last_logic_torque[i]           = 0.0f;
+}
+
+// 任一有效腿控子状态进入瞬间：参考角从当前角起步并清双环积分，保证无扰切换。
+void engineer_chassis_t::_leg_enter_active_mode(int i, float current_q)
+{
+    _leg_manual_map_active[i] = false;
+    _leg_manual_cmd_offset[i] = 0.0f;
+    _leg_zero_interp_init[i]  = false;
+    _leg_target_smooth[i]     = current_q;
+
+    if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
+    if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
+}
+
+// 小坦巡航 VMC 重力链 + q 空间软墙；include_attitude=true 时再叠加 Pitch/Roll 映射力矩。
+void engineer_chassis_t::_leg_update_vmc_feedforward(
+    int i, float q, float qdot, float pitch,
+    bool include_attitude, float f_pitch, float f_roll)
+{
+    float vmc_wall_tau = 0.0f;
+
+    // 多项式有效窗外共用的下端制动墙；起步 q≈0 死区不做主动推腿墙。
+    if (q < LEG_POLY_Q_VALID_MIN)
     {
-        f_pitch = _ctx.pid.pitch_pid->calculate(LEG_TARGET_PITCH_RAD, pitch);
-        f_roll  = _ctx.pid.roll_pid->calculate(LEG_TARGET_ROLL_RAD, roll);
+        vmc_wall_tau =
+            LEG_POLY_WALL_K * (LEG_POLY_Q_VALID_MIN - q) -
+            LEG_POLY_WALL_D * qdot;
+        vmc_wall_tau = fp32_constrain(
+            vmc_wall_tau, 0.0f, LEG_POLY_WALL_MAX);
+    }
+
+    const float theta_raw  = LEG_Q_XT_SIGN * q + LEG_POLY_THETA_OFFSET;
+    const float theta_eval = fp32_constrain(
+        theta_raw, LEG_POLY_THETA_MIN, LEG_POLY_THETA_MAX);
+
+    const leg_xt_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_eval, pitch);
+
+    const bool q_window_ok =
+        (q >= LEG_POLY_Q_VALID_MIN && q <= LEG_POLY_Q_VALID_MAX &&
+         theta_raw >= LEG_POLY_THETA_MIN &&
+         theta_raw <= LEG_POLY_THETA_MAX);
+
+    // theta 帧重力矩按线性坐标变换映射回 q 帧；
+    // 左右腿物理镜像统一留给发送边界的 LEG_MOTOR_SIGN。
+    const float poly_gravity_q =
+        LEG_Q_XT_SIGN * LEG_POLY_GRAVITY_SCALE * vmc.tau_gravity;
+
+    const bool gravity_enable =
+        LEG_VMC_GRAVITY_EN && vmc.valid && q_window_ok &&
+        (fabsf(poly_gravity_q) > 1e-5f);
+
+    const float gravity_tau = gravity_enable
+        ? fp32_constrain(poly_gravity_q,
+                         -LEG_POLY_GRAVITY_TAU_MAX,
+                         LEG_POLY_GRAVITY_TAU_MAX)
+        : 0.0f;
+
+    // Pitch/Roll 虚拟力 -> 小坦 theta 帧力矩 -> 本车 q 逻辑帧力矩。
+    // Roll 左右腿反号，与小坦 _leg_vmc() 保持一致；q->电机物理方向在发送层处理。
+    float attitude_tau_q = 0.0f;
+    if (include_attitude)
+    {
+        const float roll_force_i = (i == 0) ? f_roll : -f_roll;
+        const float tau_attitude_xt =
+            vmc.j_dynamic * (f_pitch + roll_force_i);
+        attitude_tau_q = LEG_Q_XT_SIGN * tau_attitude_xt;
+    }
+
+    _ctx.data.leg_alpha[i]              = theta_eval;
+    _ctx.data.leg_j_dynamic[i]          = vmc.j_dynamic;
+    _ctx.data.leg_tau_wall[i]           = vmc_wall_tau;
+    _ctx.data.leg_tau_attitude[i]       = attitude_tau_q;
+    _ctx.data.leg_ff_scale[i]           = 1.0f;
+    _ctx.data.out_leg_gravity_torque[i] = gravity_tau;
+    _ctx.data.leg_gravity_valid[i]      = gravity_enable;
+}
+
+// 纯双环 PID 档明确撤掉所有 VMC/前馈观测量，避免 Live Watch 残留上一档数值。
+void engineer_chassis_t::_leg_clear_feedforward(int i)
+{
+    _ctx.data.leg_alpha[i]              = 0.0f;
+    _ctx.data.leg_j_dynamic[i]          = 0.0f;
+    _ctx.data.out_leg_gravity_torque[i] = 0.0f;
+    _ctx.data.leg_gravity_valid[i]      = false;
+    _ctx.data.leg_tau_wall[i]           = 0.0f;
+    _ctx.data.leg_tau_attitude[i]       = 0.0f;
+    _ctx.data.leg_ff_scale[i]           = 0.0f;
+}
+
+// 左 MID：右摇杆下推增量映射；摇杆回中后冻结当前平滑目标，不自动跳回零点。
+void engineer_chassis_t::_leg_update_manual_target(int i, float stick_cmd)
+{
+    _leg_zero_interp_init[i] = false;
+
+    if (stick_cmd < -LEG_MANUAL_STICK_EPS)
+    {
+        // 第一次推摇杆时把当前平滑目标作为基准，避免中位命令 0 造成目标跳变。
+        if (!_leg_manual_map_active[i])
+        {
+            _leg_manual_map_active[i] = true;
+            _leg_manual_cmd_offset[i] =
+                _leg_target_smooth[i] - stick_cmd;
+        }
+
+        float desired = stick_cmd + _leg_manual_cmd_offset[i];
+        desired = fp32_constrain(desired, LEG_MANUAL_MIN, LEG_MANUAL_MAX);
+
+        _leg_target_smooth[i] +=
+            (desired - _leg_target_smooth[i]) * LEG_TARGET_LERP;
+        _leg_target_smooth[i] = fp32_constrain(
+            _leg_target_smooth[i], LEG_MANUAL_MIN, LEG_MANUAL_MAX);
     }
     else
     {
-        // 手动/失能/未校准/关闭补偿时清空积分和滤波器，避免再次进入瞬间阶跃
-        if (_ctx.pid.pitch_pid) _ctx.pid.pitch_pid->clear();
-        if (_ctx.pid.roll_pid)  _ctx.pid.roll_pid->clear();
+        _leg_manual_map_active[i] = false;
     }
+}
 
-    _ctx.data.att_force_pitch = f_pitch;
-    _ctx.data.att_force_roll  = f_roll;
-
-    for (int i = 0; i < 2; i++)
+// 左 DOWN：最终目标为校准零点，但位置环参考按最大速度逐步接近，避免目标阶跃。
+void engineer_chassis_t::_leg_update_home_target(int i, float current_q)
+{
+    if (!_leg_zero_interp_init[i])
     {
-        // ---- 腿未使能：目标/输出清零、清 PID，腿以 0 力矩松开 ----
-        if (!_ctx.cmd->leg.en)
-        {
-            _ctx.data.target_leg_theta[i]       = 0.0f;
-            _ctx.data.target_leg_radps[i]       = 0.0f;
-            _ctx.data.out_leg_torque[i]         = 0.0f;
-            _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-            _ctx.data.leg_tau_wall[i]           = 0.0f;
-            _ctx.data.leg_tau_damping[i]        = 0.0f;
-            _ctx.data.leg_ff_scale[i]           = 0.0f;
-            _ctx.data.leg_tau_manual_pid[i]     = 0.0f;
-            _ctx.data.leg_tau_attitude[i]       = 0.0f;
-            _ctx.data.leg_control_mode[i]       = 0.0f;
-
-            _leg_target_smooth[i]      = 0.0f;
-            _leg_zero_interp_init[i]   = false;
-            _leg_manual_map_active[i]  = false;
-            _leg_manual_cmd_offset[i]  = 0.0f;
-            _leg_last_logic_torque[i]  = 0.0f;
-
-            if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
-            if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
-            continue;
-        }
-
-        // ---- 使能但尚未校准：不输出，等待右拨杆 UP 边沿校准 ----
-        if (!_ctx.data.leg_calibrated[i])
-        {
-            _ctx.data.out_leg_torque[i]         = 0.0f;
-            _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-            _ctx.data.leg_gravity_valid[i]      = false;
-            _ctx.data.leg_tau_attitude[i]       = 0.0f;
-            _ctx.data.leg_control_mode[i]       = 0.0f;
-            _leg_last_logic_torque[i]           = 0.0f;
-            continue;
-        }
-
-        const float q    = _ctx.data.current_leg_theta[i];
-        const float qdot = _ctx.data.current_leg_radps[i];
-
-        // 模式切换边沿先清 PID 积分；所有分支的位置环参考都先从当前角起步，
-        // 再由各分支决定持续跟随当前角、插值回零或接收摇杆目标。
-        const bool vmc_edge  = (vmc_mode != _leg_vmc_prev);
-        const bool home_edge = (home_mode != _leg_home_prev);
-        if (vmc_edge || home_edge)
-        {
-            _leg_manual_map_active[i] = false;
-            _leg_manual_cmd_offset[i] = 0.0f;
-            _leg_zero_interp_init[i] = false;
-
-            // 任何腿控模式进入瞬间，位置环参考都从当前角起步；
-            // 固定 0 回零分支随后用限速插值把参考角平滑移动到 0。
-            _leg_target_smooth[i] = q;
-
-            if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
-            if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
-        }
-
-        // =================================================
-        // 小坦巡航 VMC 重力链
-        // 所有模式都会计算本块诊断量；只有上方 vmc_mode 分支会把
-        // gravity_tau / wall / attitude 加入 raw_torque。
-        // =================================================
-        leg_xt_vmc_result_t vmc{};
-        float gravity_tau   = 0.0f;
-        float vmc_wall_tau  = 0.0f;
-        bool  gravity_enable = false;
-
-        // 多项式有效窗外共用的下端制动墙；起步 q≈0 死区不做主动推腿墙
-        if (q < LEG_POLY_Q_VALID_MIN)
-        {
-            vmc_wall_tau =
-                LEG_POLY_WALL_K * (LEG_POLY_Q_VALID_MIN - q) -
-                LEG_POLY_WALL_D * qdot;
-            vmc_wall_tau = fp32_constrain(
-                vmc_wall_tau, 0.0f, LEG_POLY_WALL_MAX);
-        }
-
-        const float theta_raw  = LEG_Q_XT_SIGN * q + LEG_POLY_THETA_OFFSET;
-        const float theta_eval = fp32_constrain(
-            theta_raw, LEG_POLY_THETA_MIN, LEG_POLY_THETA_MAX);
-
-        vmc = calc_leg_xiaotan_vmc(theta_eval, pitch);
-
-        const bool q_window_ok =
-            (q >= LEG_POLY_Q_VALID_MIN && q <= LEG_POLY_Q_VALID_MAX &&
-             theta_raw >= LEG_POLY_THETA_MIN &&
-             theta_raw <= LEG_POLY_THETA_MAX);
-
-        // theta 帧重力矩按线性坐标变换映射回 q 帧；
-        // 左右腿物理镜像统一留给发送边界的 LEG_MOTOR_SIGN。
-        const float poly_gravity_q =
-            LEG_Q_XT_SIGN * LEG_POLY_GRAVITY_SCALE * vmc.tau_gravity;
-
-        gravity_enable =
-            LEG_VMC_GRAVITY_EN && vmc.valid && q_window_ok &&
-            (fabsf(poly_gravity_q) > 1e-5f);
-
-        gravity_tau = gravity_enable
-            ? fp32_constrain(poly_gravity_q,
-                             -LEG_POLY_GRAVITY_TAU_MAX,
-                             LEG_POLY_GRAVITY_TAU_MAX)
-            : 0.0f;
-
-        // Pitch/Roll 虚拟力 -> 小坦 theta 帧力矩 -> 本车 q 逻辑帧力矩。
-        // Roll 左右腿反号，与小坦 _leg_vmc() 保持一致；q->电机物理方向在发送层处理。
-        float attitude_tau_q = 0.0f;
-        if (attitude_active)
-        {
-            const float roll_force_i = (i == 0) ? f_roll : -f_roll;
-            const float tau_attitude_xt =
-                vmc.j_dynamic * (f_pitch + roll_force_i);
-            attitude_tau_q = LEG_Q_XT_SIGN * tau_attitude_xt;
-        }
-
-        // VMC 诊断量
-        _ctx.data.leg_alpha[i]                = theta_eval;
-        _ctx.data.leg_j_dynamic[i]            = vmc.j_dynamic;
-        _ctx.data.leg_tau_wall[i]             = vmc_wall_tau;
-        _ctx.data.leg_tau_attitude[i]         = attitude_tau_q;
-        _ctx.data.leg_ff_scale[i]             = 1.0f;
-        _ctx.data.out_leg_gravity_torque[i]   = gravity_tau;
-        _ctx.data.leg_gravity_valid[i]        = gravity_enable;
-
-        float raw_torque     = 0.0f;
-        float manual_pid_tau = 0.0f;
-
-        if (vmc_mode)
-        {
-            // VMC 模式不追摇杆位置目标；平滑目标持续跟随当前 q，
-            // 这样切到非 VMC 分支的第一帧位置环目标就是当前腿角。
-            _leg_zero_interp_init[i]         = false;
-            _leg_target_smooth[i]            = q;
-            _ctx.data.target_leg_theta[i]   = q;
-            _ctx.data.target_leg_radps[i]   = 0.0f;
-            _ctx.data.leg_tau_manual_pid[i] = 0.0f;
-            _ctx.data.leg_control_mode[i]   = 2.0f;
-
-            raw_torque = gravity_tau + vmc_wall_tau + attitude_tau_q;
-        }
-        else
-        {
-            if (!home_mode)
-            {
-                // 当前磁盘中的固定 0 回零分支（!home_mode）。
-                // 最终目标是校准零点，但送给位置环的参考角按 v_max 逐步接近，
-                // 避免目标角阶跃导致位置环立刻输出很高的目标角速度。
-                if (!_leg_zero_interp_init[i])
-                {
-                    _leg_target_smooth[i]    = q;
-                    _leg_zero_interp_init[i] = true;
-                }
-
-                const float home_goal   = 0.0f;
-                const float goal_error  = home_goal - _leg_target_smooth[i];
-                const float max_step    = LEG_ZERO_INTERP_VMAX * LEG_CONTROL_DT_S;
-                const float interp_step =
-                    fp32_constrain(goal_error, -max_step, max_step);
-
-                _leg_target_smooth[i] += interp_step;
-
-                // 参考角进入小死区后直接吸附到最终目标；位置环继续负责保持。
-                if (fabsf(home_goal - _leg_target_smooth[i]) <= LEG_ZERO_INTERP_EPS)
-                {
-                    _leg_target_smooth[i] = home_goal;
-                }
-
-                _leg_manual_map_active[i]  = false;
-                _leg_manual_cmd_offset[i]  = 0.0f;
-            }
-            else
-            {
-                // home_to_zero=true 分支：当前磁盘保留“中心保持 + 下推增量映射”。
-                _leg_zero_interp_init[i] = false;
-
-                // 第一次推摇杆时把当前平滑目标作为基准，避免中位命令 0 造成目标跳变。
-                const float stick_cmd = _ctx.cmd->leg.target_theta;
-
-                if (stick_cmd < -LEG_MANUAL_STICK_EPS)
-                {
-                    if (!_leg_manual_map_active[i])
-                    {
-                        _leg_manual_map_active[i] = true;
-                        _leg_manual_cmd_offset[i] =
-                            _leg_target_smooth[i] - stick_cmd;
-                    }
-
-                    float desired = stick_cmd + _leg_manual_cmd_offset[i];
-                    desired = fp32_constrain(desired, LEG_MANUAL_MIN, LEG_MANUAL_MAX);
-
-                    _leg_target_smooth[i] +=
-                        (desired - _leg_target_smooth[i]) * LEG_TARGET_LERP;
-                    _leg_target_smooth[i] = fp32_constrain(
-                        _leg_target_smooth[i], LEG_MANUAL_MIN, LEG_MANUAL_MAX);
-                }
-                else
-                {
-                    // 摇杆回中：冻结并保持当前目标，不自动跳回校准收起位
-                    _leg_manual_map_active[i] = false;
-                }
-            }
-
-            _ctx.data.target_leg_theta[i] = _leg_target_smooth[i];
-
-            if (_ctx.pid.leg_pos_pid[i])
-            {
-                _ctx.data.target_leg_radps[i] =
-                    _ctx.pid.leg_pos_pid[i]->calculate(
-                        _ctx.data.target_leg_theta[i],
-                        _ctx.data.current_leg_theta[i]);
-            }
-
-            if (_ctx.pid.leg_vel_pid[i])
-            {
-                manual_pid_tau = _ctx.pid.leg_vel_pid[i]->calculate(
-                    _ctx.data.target_leg_radps[i],
-                    _ctx.data.current_leg_radps[i]);
-            }
-
-            // 非 UP/VMC 分支只使用双环 PID 输出；重力、软墙和姿态力都不叠加。
-            raw_torque                            = manual_pid_tau;
-            _ctx.data.leg_tau_manual_pid[i]      = manual_pid_tau;
-            _ctx.data.leg_control_mode[i]        = home_mode ? 3.0f : 1.0f;
-
-            gravity_tau        = 0.0f;
-            vmc_wall_tau       = 0.0f;
-            attitude_tau_q     = 0.0f;
-            _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-            _ctx.data.leg_gravity_valid[i]      = false;
-            _ctx.data.leg_tau_wall[i]           = 0.0f;
-            _ctx.data.leg_tau_attitude[i]       = 0.0f;
-            _ctx.data.leg_ff_scale[i]           = 0.0f;
-        }
-
-        // ---- 全模式 q 空间阻尼：只抑制瞬时窜动，不负责位置保持 ----
-        float tau_damping = -LEG_F_JOINT_DAMP_KD * qdot;
-        tau_damping = fp32_constrain(
-            tau_damping, -LEG_F_JOINT_DAMP_MAX, LEG_F_JOINT_DAMP_MAX);
-
-        _ctx.data.leg_tau_damping[i] = tau_damping;
-        raw_torque += tau_damping;
-
-        raw_torque = fp32_constrain(raw_torque, -LEG_MAX_TORQUE, LEG_MAX_TORQUE);
-
-        // ---- 输出斜率限制：抑制模式切换、有效域跳变和保护造成的力矩阶跃 ----
-        float delta = raw_torque - _leg_last_logic_torque[i];
-        delta = fp32_constrain(
-            delta, -LEG_F_TORQUE_SLEW_STEP, LEG_F_TORQUE_SLEW_STEP);
-
-        const float output_torque = fp32_constrain(
-            _leg_last_logic_torque[i] + delta,
-            -LEG_MAX_TORQUE,
-            LEG_MAX_TORQUE);
-
-        _leg_last_logic_torque[i] = output_torque;
-        _ctx.data.out_leg_torque[i] = output_torque;
+        _leg_target_smooth[i]    = current_q;
+        _leg_zero_interp_init[i] = true;
     }
 
-    _leg_vmc_prev  = vmc_mode;
-    _leg_home_prev = home_mode;
+    constexpr float home_goal = 0.0f;
+    const float goal_error    = home_goal - _leg_target_smooth[i];
+    const float max_step      = LEG_ZERO_INTERP_VMAX * LEG_CONTROL_DT_S;
+    const float interp_step   =
+        fp32_constrain(goal_error, -max_step, max_step);
+
+    _leg_target_smooth[i] += interp_step;
+
+    // 参考角进入小死区后直接吸附到最终目标；位置环继续负责保持。
+    if (fabsf(home_goal - _leg_target_smooth[i]) <= LEG_ZERO_INTERP_EPS)
+    {
+        _leg_target_smooth[i] = home_goal;
+    }
+
+    _leg_manual_map_active[i] = false;
+    _leg_manual_cmd_offset[i] = 0.0f;
+}
+
+// 位置环 -> 速度环；返回速度环 PID 输出的逻辑力矩。
+float engineer_chassis_t::_leg_run_dual_pid(int i)
+{
+    _ctx.data.target_leg_theta[i] = _leg_target_smooth[i];
+    _ctx.data.target_leg_radps[i] = 0.0f;
+
+    if (_ctx.pid.leg_pos_pid[i])
+    {
+        _ctx.data.target_leg_radps[i] =
+            _ctx.pid.leg_pos_pid[i]->calculate(
+                _ctx.data.target_leg_theta[i],
+                _ctx.data.current_leg_theta[i]);
+    }
+
+    float pid_tau = 0.0f;
+    if (_ctx.pid.leg_vel_pid[i])
+    {
+        pid_tau = _ctx.pid.leg_vel_pid[i]->calculate(
+            _ctx.data.target_leg_radps[i],
+            _ctx.data.current_leg_radps[i]);
+    }
+
+    return pid_tau;
+}
+
+// 所有有效腿控模式共用：关节阻尼、总力矩限幅和 1ms 输出斜率限制。
+void engineer_chassis_t::_leg_apply_common_output(
+    int i, float raw_torque, float qdot)
+{
+    float tau_damping = -LEG_F_JOINT_DAMP_KD * qdot;
+    tau_damping = fp32_constrain(
+        tau_damping, -LEG_F_JOINT_DAMP_MAX, LEG_F_JOINT_DAMP_MAX);
+
+    _ctx.data.leg_tau_damping[i] = tau_damping;
+    raw_torque += tau_damping;
+    raw_torque = fp32_constrain(raw_torque, -LEG_MAX_TORQUE, LEG_MAX_TORQUE);
+
+    // 抑制模式切换、有效域跳变和保护造成的力矩阶跃。
+    float delta = raw_torque - _leg_last_logic_torque[i];
+    delta = fp32_constrain(
+        delta, -LEG_F_TORQUE_SLEW_STEP, LEG_F_TORQUE_SLEW_STEP);
+
+    const float output_torque = fp32_constrain(
+        _leg_last_logic_torque[i] + delta,
+        -LEG_MAX_TORQUE,
+        LEG_MAX_TORQUE);
+
+    _leg_last_logic_torque[i]     = output_torque;
+    _ctx.data.out_leg_torque[i]   = output_torque;
+}
+
+// =========================================================
+// _leg_control()：腿部 active 子 HFSM 协调入口
+// ---------------------------------------------------------
+// 各状态的 enter/execute/exit 拆分在 Chassis/fsm/leg/*.cpp；
+// 这里只负责把使能、校准和左拨杆请求映射为目标子状态，并驱动 PYRo FSM。
+// 顶层 active/passive FSM 与 Chassis/fsm 下两个顶层状态文件保持不变。
+// =========================================================
+void engineer_chassis_t::_leg_control()
+{
+    const bool vmc_request        = _ctx.cmd->track_run;
+    const bool pid_gravity_request = _ctx.cmd->leg.home_to_zero;
+
+    state_t<owner> *target_state = &_leg_state_pid_home;
+
+    if (!_ctx.cmd->leg.en)
+    {
+        target_state = &_leg_state_disabled;
+    }
+    else if (!_ctx.data.leg_calibrated[0] || !_ctx.data.leg_calibrated[1])
+    {
+        // 两腿共用同一左拨杆模式；任一条腿未完成校准时先进入安全等待态。
+        target_state = &_leg_state_uncalibrated;
+    }
+    else if (vmc_request)
+    {
+        target_state = &_leg_state_vmc;
+    }
+    else if (pid_gravity_request)
+    {
+        target_state = &_leg_state_pid_gravity;
+    }
+    else
+    {
+        target_state = &_leg_state_pid_home;
+    }
+
+    _leg_fsm.change_state(target_state);
+    _leg_fsm.execute(this);
 }
 
 // =========================================================

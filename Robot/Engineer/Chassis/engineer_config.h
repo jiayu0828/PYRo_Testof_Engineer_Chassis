@@ -107,7 +107,7 @@ constexpr float LEG_MANUAL_STICK_EPS = 0.05f;
 // 不是电机硬件安装方向；硬件方向统一看第 0 节 MOTOR_SIGN 表。
 constexpr bool  LEG_VMC_GRAVITY_EN = true;
 constexpr float LEG_GRAVITY        = 9.80665f;  // 重力加速度 m/s²
-constexpr float LEG_POLY_VEH_MASS   = 16.0f;     // 当前 VMC 链使用的整车等效质量 kg
+constexpr float LEG_POLY_VEH_MASS   = 20.0f;     // 当前 VMC 链使用的整车等效质量 kg
 
 constexpr float LEG_Q_XT_SIGN       = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
 constexpr float LEG_POLY_THETA_OFFSET = 0.0f;
@@ -157,7 +157,10 @@ constexpr float LEG_XT_YB_COEF[LEG_XT_YB_DEGREE + 1] = {
 
 // Pitch/Roll 姿态环参数归属：
 // - PID 增益、限幅、滤波：pyro_chassis_app.cpp 的 pitch_pid/roll_pid 构造函数；
-// - 目标角、使能、输出极性：pyro_engineer_chassis.cpp 顶部的姿态环运行参数区。
+// - 目标角、使能开关：腿部 VMC 状态文件与本配置头共同使用。
+constexpr bool  LEG_ATTITUDE_PID_EN   = true;
+constexpr float LEG_TARGET_PITCH_RAD = 0.10f; // rad
+constexpr float LEG_TARGET_ROLL_RAD  = 0.0f;  // rad
 
 // =========================================================
 // 6. IMU 安装补偿
