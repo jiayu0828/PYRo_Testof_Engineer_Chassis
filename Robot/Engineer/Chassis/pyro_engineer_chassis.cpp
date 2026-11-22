@@ -182,7 +182,7 @@ void engineer_chassis_t::_update_feedback()
         const auto &cap_fb        = _ctx.supercap_rx_feedback;
 
         _ctx.data.supercap_online            = supercap->check_online();
-        _ctx.data.supercap_cap_power_raw     = static_cast<float>(cap_fb.cap_power_cap);
+        _ctx.data.supercap_cap_power_raw     = static_cast<float>(cap_fb.cap_power_cap)/100.0f - 250.0f;
         _ctx.data.supercap_chassis_power_raw = static_cast<float>(cap_fb.chassis_power_cap);
         _ctx.data.supercap_voltage_cv        = static_cast<float>(cap_fb.vot_cap);
         _ctx.data.supercap_error_flag        = cap_fb.error_flag;
@@ -299,10 +299,10 @@ void engineer_chassis_t::_mecanum_control()
 void engineer_chassis_t::_mecanum_power_control_init()
 {
     // 四个麦轮共用这一组 FL.csv 拟合参数，作为当前四轮平均模型。
-    constexpr float common_k1 = 0.03806726f; // 机械功率项系数，对应 cmd * rpm
-    constexpr float common_k2 = 0.06338624f; // 铜损/热损耗系数，对应 cmd^2
-    constexpr float common_k3 = 0.00010471f; // 高频摩擦损耗，对应 rpm^2
-    constexpr float common_k4 = 0.00106781f; // 库仑摩擦损耗，对应 |rpm|
+    constexpr float common_k1 = 0.03622596f; // 机械功率项系数，对应 cmd * rpm
+    constexpr float common_k2 = 0.08411378f; // 铜损/热损耗系数，对应 cmd^2
+    constexpr float common_k3 = 0.00005988f; // 高频摩擦损耗，对应 rpm^2
+    constexpr float common_k4 = 0.01115514f; // 库仑摩擦损耗，对应 |rpm|
     constexpr float common_k5 = 0.75f;       // 静态基础功耗 W
     constexpr float common_alpha = 0.00393f; // 铜阻温度修正系数
 
@@ -338,6 +338,7 @@ void engineer_chassis_t::_mecanum_power_control_init()
 // =========================================================
 // _mecanum_power_control()：仅对四个麦轮做模型功率限制
 // =========================================================
+//现在先关掉功率控制，只看我的原始的PID下的功率
 void engineer_chassis_t::_mecanum_power_control()
 {
     // 麦轮功控运行参数：只作用于 4 个麦轮，不影响履带和腿部。
@@ -345,16 +346,13 @@ void engineer_chassis_t::_mecanum_power_control()
     constexpr float default_power_limit_w     = 50.0f; // 无裁判系统时的四轮总预测功率上限 W
     constexpr float default_buffer_energy_j   = 60.0f; // 无裁判系统时的虚拟缓冲能量 J
     constexpr float scale_valid_cmd_threshold = 0.001f; // 判断实际缩放/介入的最小指令差
-
+    constexpr float default_cap_extra_power_w     = 150.0f;  // 超级电容额外功率口径 W（裁判系统未启用时）
     _ctx.data.wheel_power_control_active  = false;
     _ctx.data.wheel_power_total_w         = 0.0f;
     _ctx.data.supercap_extra_power_allowed = false;
-    _ctx.data.supercap_extra_power_w       = 0.0f;
 
     if (!power_control_en)
     {
-        _ctx.data.wheel_power_limit_w         = 0.0f;
-        _ctx.data.wheel_power_buffer_energy_j = 0.0f;
         return;
     }
 
@@ -392,10 +390,6 @@ void engineer_chassis_t::_mecanum_power_control()
         _ctx.data.wheel_power_scale[i]            = 1.0f;
 
         power_node_t *node = _ctx.mecanum_power_node[i];
-        if (node == nullptr)
-        {
-            continue;
-        }
 
         node->target_cmd       = _ctx.data.out_wheel_torque[i];
         node->uncontrolled_cmd = 0.0f;
@@ -406,14 +400,12 @@ void engineer_chassis_t::_mecanum_power_control()
     // 2. 超级电容额外功率口径：
     //    电容板在线、状态机已周期发送 use_cap=1，且电容电压高于使能门限后，
     //    才给四轮麦轮功控放宽一个固定功率；电压低于回差门限立即收回。
-    constexpr bool  supercap_extra_power_en       = true;
-    constexpr float supercap_extra_power_w        = 80.0f; // 参考小坦 Hero 保守值，实车再标定
+    constexpr bool  supercap_extra_power_en       = true;//先关掉超级电容
     constexpr float supercap_enable_voltage_cv    = 1900.0f; // 19.00 V
     constexpr float supercap_disable_voltage_cv   = 1750.0f; // 17.50 V，滞回防抖
     static bool     supercap_voltage_ready        = false;
 
-    if (!supercap_extra_power_en || !_ctx.data.supercap_online ||
-        !_ctx.data.supercap_output_enabled)
+    if (!supercap_extra_power_en || !_ctx.data.supercap_online || !_ctx.data.supercap_output_enabled)
     {
         supercap_voltage_ready = false;
     }
@@ -423,13 +415,13 @@ void engineer_chassis_t::_mecanum_power_control()
     }
     else if (_ctx.data.supercap_voltage_cv <= supercap_disable_voltage_cv)
     {
-        supercap_voltage_ready = false;
+        supercap_voltage_ready = false; 
     }
 
     const float cap_extra_power_w =
         (supercap_extra_power_en && _ctx.data.supercap_online &&
          _ctx.data.supercap_output_enabled && supercap_voltage_ready)
-            ? supercap_extra_power_w
+            ? default_cap_extra_power_w + _ctx.data.supercap_cap_power_raw
             : 0.0f;
 
     _ctx.data.supercap_extra_power_allowed = cap_extra_power_w > 0.0f;
@@ -443,10 +435,6 @@ void engineer_chassis_t::_mecanum_power_control()
     for (int i = 0; i < 4; ++i)
     {
         power_node_t *node = _ctx.mecanum_power_node[i];
-        if (node == nullptr)
-        {
-            continue;
-        }
 
         _ctx.data.out_wheel_torque[i]                = node->safe_cmd;
         _ctx.data.wheel_cmd_after_power_ctrl[i]      = node->safe_cmd;
@@ -491,7 +479,7 @@ void engineer_chassis_t::_supercap_control()
     static uint32_t disable_timer = 0;
 
     supercap_drv_t *supercap = supercap_drv_t::get_instance();
-    const bool cap_online = (supercap != nullptr) && supercap->check_online();
+    const bool cap_online = supercap->check_online();
 
     // 当前未启用裁判串口：本地以主动 FSM + 麦轮使能作为允许电容参与的安全条件。
     const bool chassis_armed =
@@ -630,12 +618,11 @@ void engineer_chassis_t::_track_control()
 }
 
 // =========================================================
-// _calibrate_leg()：腿软件置零（小坦式校准，非堵转）
+// _calibrate_leg()：腿软件置零
 // =========================================================
 void engineer_chassis_t::_calibrate_leg()
 {
-    // 用户标定的固定绝对角初值；当前循环会在电机句柄存在时，
-    // 再用该电机当前 unwrap 角覆盖对应 leg_theta_cal[i]。
+
     _ctx.data.leg_theta_cal[0] = LEG_CALI_LEFT;
     _ctx.data.leg_theta_cal[1] = LEG_CALI_RIGHT;
 
@@ -644,7 +631,7 @@ void engineer_chassis_t::_calibrate_leg()
         if (!_ctx.motor.leg[i]) continue;
 
         // 把当前多圈角记为校准基准，相对角归零
-        _ctx.data.leg_theta_cal[i]     = _ctx.data.leg_theta_unwrap[i];
+        // _ctx.data.leg_theta_cal[i]     = _ctx.data.leg_theta_unwrap[i];
         _ctx.data.current_leg_theta[i] = 0.0f;
         _ctx.data.target_leg_theta[i]  = 0.0f;
         _ctx.data.target_leg_radps[i]  = 0.0f;
@@ -750,9 +737,6 @@ void engineer_chassis_t::_leg_feedback()
 
 // =========================================================
 // 腿部机构算法辅助函数
-// ---------------------------------------------------------
-// Hero 风格的状态 enter/execute/exit 拆分在 Chassis/fsm/leg/*.cpp；
-// 本文件只保留可复用的机构计算、目标生成和输出限幅函数。
 // =========================================================
 
 // 腿失能：输出和积分全部清零，重新使能时不会携带旧力矩或积分冲击。

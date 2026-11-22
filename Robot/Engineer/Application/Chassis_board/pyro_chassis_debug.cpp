@@ -1,15 +1,14 @@
 /**
  * @file pyro_chassis_debug.cpp
- * @brief Engineer 底盘调试任务：左前轮功率模型标定 JustFloat 输出（UART1）
+ * @brief Engineer 底盘调试任务：超级电容 JustFloat 观测输出（UART1）
  *
- * 当前标定通道固定为左前轮 FL（mecanum 数组索引 0，CAN3 ID1）：
- *   CH1  0x212 功率计实测功率 power（W）
- *   CH2  左前轮逻辑力矩指令 torque（N·m，PID 输出；发送边界再乘电机方向）
- *   CH3  左前轮轮轴转速 rpm（已换算到轮轴并应用 MECANUM_MOTOR_SIGN）
- *   CH4  左前轮 M3508 电调温度 temp（℃）
+ * 当前调试通道固定为 4 个 float（10 ms/帧，小端）：
+ *   CH1  supercap_online_f   电容板在线状态，0.0f/1.0f
+ *   CH2  cap_voltage_V       电容电压，按当前固件 0.01 V/LSB 口径换算为 V
+ *   CH3  cap_power_raw       电容板回传 cap_power_cap 原始值（驱动未缩放）
+ *   CH4  chassis_power_raw   电容板回传 chassis_power_cap 原始值（驱动未缩放）
  *
- * 功率计当前挂在腿电机所在 CAN1，CAN ID=0x212。
- * 本任务只通过 UART1 发送标定数据，不参与功率闭环控制。
+ * 超级电容反馈来自 UART7；本任务只通过 UART1 发送观测数据，不参与控制闭环。
  */
 
 #include "pyro_engineer_chassis.h"
@@ -23,7 +22,6 @@ using namespace pyro;
 
 static constexpr uint8_t  DEBUG_VAR_COUNT  = 4;
 static constexpr uint32_t DEBUG_PERIOD_MS  = 10;
-static constexpr uint8_t  CALIB_WHEEL_IDX  = 0; // 左前轮 FL
 
 static const uint8_t JCOM_FRAME_TAIL[4] = {0x00, 0x00, 0x80, 0x7F};
 
@@ -68,10 +66,10 @@ static void debug_thread(void *argument)
             const auto &ctx = s_chassis->get_ctx();
             const auto &d   = ctx.data;
 
-            vars[0] = d.power_meter_w;
-            vars[1] = d.out_wheel_torque[CALIB_WHEEL_IDX];
-            vars[2] = d.current_wheel_rpm[CALIB_WHEEL_IDX];
-            vars[3] = d.current_wheel_temp[CALIB_WHEEL_IDX];
+            vars[0] = d.power_meter_w ;
+            vars[1] = d.supercap_voltage_cv * 0.01f;
+            vars[2] = d.supercap_extra_power_w;
+            vars[3] = d.supercap_chassis_power_raw/100.0f;
 
             jcom_send(vars);
         }
