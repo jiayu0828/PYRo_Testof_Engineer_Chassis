@@ -5,7 +5,7 @@
 #set(BOARD "ARM_BOARD")
 set(BOARD "CHASSIS_BOARD")
 add_library(Engineer OBJECT
-    pyro_mission_planner.cpp)
+)
 
 target_compile_definitions(Engineer PRIVATE
         BOARD=${BOARD}
@@ -21,12 +21,15 @@ set(BASE_SOURCES
 )
 
 set(ARM_EXTRA_SOURCES
-
 )
 set(CHASSIS_EXTRA_SOURCES
+#==================== 任务模块 =====================
 pyro_init_thread.cpp
 pyro_mission_planner.cpp
+#==================== 底盘模块 =====================
 Chassis/pyro_engineer_chassis.cpp
+Chassis/pyro_chassis_leg.cpp
+#==================== 状态机模块 =====================
 Chassis/fsm/pyro_engineer_active_state.cpp
 Chassis/fsm/pyro_engineer_passive_state.cpp
 Chassis/fsm/leg/pyro_engineer_leg_disabled_state.cpp
@@ -34,8 +37,11 @@ Chassis/fsm/leg/pyro_engineer_leg_uncalibrated_state.cpp
 Chassis/fsm/leg/pyro_engineer_leg_vmc_state.cpp
 Chassis/fsm/leg/pyro_engineer_leg_pid_gravity_state.cpp
 Chassis/fsm/leg/pyro_engineer_leg_pid_home_state.cpp
+#==================== 应用模块 =====================
 Application/Chassis_board/pyro_chassis_app.cpp
+#==================== 调试模块 =====================
 Application/Chassis_board/pyro_chassis_debug.cpp
+#==================== 通信模块 =====================
 Communication/Chassis_board/pyro_chassis_remote.cpp
 )
 if (BOARD STREQUAL "ARM_BOARD")
