@@ -8,8 +8,14 @@
 #include "pyro_power_control.h"
 #include "pyro_supercap_drv.h"
 #include "pyro_kin_hybrid.h" // 混合底盘运动学（麦轮速度解算，支持非对称独立 K）
+#include "pyro_algo_common.h"
+#include "pyro_dji_motor_drv.h"
+#include "pyro_ins.h"
+#include "pyro_referee.h"
+#include "pyro_warning_drv.h"
+//pyro库相关引用
 #include "engineer_config.h"
-
+//底盘单独的参数
 namespace pyro
 {
 

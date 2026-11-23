@@ -8,6 +8,7 @@
 #include "pyro_referee.h"
 #include "pyro_ins.h"
 #include "pyro_supercap_drv.h"
+#include "pyro_warning_drv.h"
 namespace pyro
 {
 
@@ -20,7 +21,7 @@ can_drv_t *can3_drv = nullptr;
 extern "C" void chassis_app_init(void);
 extern "C" void chassis_remote_init(void);
 extern "C" void chassis_debug_init(void);
-
+extern void chassis_warning_init(void);
 extern "C"
 {
 
@@ -90,6 +91,9 @@ void pyro_init_thread(void *argument)
 
     /* 遥控器通信任务：DR16 读遥控并下发 engineer_cmd_t */
     chassis_remote_init();
+
+    /* 警告任务：处理底盘警告信息 */
+    chassis_warning_init();
 
     /* 调试任务：JustFloat 多通道输出腿/IMU 数据 */
     chassis_debug_init();

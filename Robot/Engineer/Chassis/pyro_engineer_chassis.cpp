@@ -1,19 +1,4 @@
-/**
- * @file pyro_engineer_chassis.cpp
- * @brief Engineer 混合底盘核心模块：反馈、运动学、麦轮/履带/腿控制与统一发送。
- *
- * 主数据流：
- *   _update_feedback() -> _fsm_execute()（active/passive）-> _send_motor_command()。
- * 电机硬件方向只在反馈读取和指令发送边界使用第 0 节 *_MOTOR_SIGN；
- * PID、VMC 和运动学内部统一使用逻辑坐标，避免控制链中散落单侧负号。
- */
-
 #include "pyro_engineer_chassis.h"
-
-#include "pyro_algo_common.h"
-#include "pyro_dji_motor_drv.h"
-#include "pyro_ins.h"
-#include "pyro_referee.h"
 
 #include <cmath>
 
@@ -24,6 +9,7 @@ namespace pyro
 // 小坦巡航 VMC 适配函数
 // 输入 theta/theta_dot 为小坦站立角坐标系；输出 tau_gravity
 // 仍为小坦 theta 帧力矩，由调用层做本车 q 帧符号适配。
+// 现在已经明白怎么推导的了 一会修改一下相关的参数的问题
 // =========================================================
 namespace
 {
@@ -121,6 +107,17 @@ status_t engineer_chassis_t::_init()
 }
 
 // =========================================================
+// 初始化报警任务
+// =========================================================
+void chassis_warning_init(){
+     // warning_drv_t 是全局类，不在 pyro 命名空间内
+    warning_drv_t &warning = warning_drv_t::instance();
+
+    // 初始化 WS2812 + 蜂鸣器，并创建 20ms 循环任务
+    warning.start();
+}
+
+// =========================================================
 // _update_feedback()：反馈更新（每周期先执行）
 // =========================================================
 void engineer_chassis_t::_update_feedback()
@@ -183,7 +180,7 @@ void engineer_chassis_t::_update_feedback()
 
         _ctx.data.supercap_online            = supercap->check_online();
         _ctx.data.supercap_cap_power_raw     = static_cast<float>(cap_fb.cap_power_cap)/100.0f - 250.0f;
-        _ctx.data.supercap_chassis_power_raw = static_cast<float>(cap_fb.chassis_power_cap);
+        _ctx.data.supercap_chassis_power_raw = static_cast<float>(cap_fb.chassis_power_cap)/100.0f;
         _ctx.data.supercap_voltage_cv        = static_cast<float>(cap_fb.vot_cap);
         _ctx.data.supercap_error_flag        = cap_fb.error_flag;
         _ctx.data.supercap_low_flag          = cap_fb.cap_low_flag;
@@ -417,7 +414,21 @@ void engineer_chassis_t::_mecanum_power_control()
     {
         supercap_voltage_ready = false; 
     }
-
+    if(_ctx.data.supercap_error_flag == 1U){
+        auto &warning = warning_drv_t::instance();
+        warning.set_buzzer_warning_level(
+        warning_drv_t::buzzer_warning_level_t::WARNING_LEVEL_3);
+    }//如果有error_flag 直接报警
+    else{
+        auto &warning = warning_drv_t::instance();
+        warning.set_buzzer_warning_level(warning_drv_t::buzzer_warning_level_t::NONE); 
+    }//如果清除了error_flg 就先不管它了
+    if(_ctx.data.supercap_chassis_power_raw > 100.0f){
+        auto &warning = warning_drv_t::instance();
+        warning.set_buzzer_warning_level(
+        warning_drv_t::buzzer_warning_level_t::WARNING_LEVEL_2);
+    }//但如果无论有无error_flag 功率没控住就直接报警
+    
     const float cap_extra_power_w =
         (supercap_extra_power_en && _ctx.data.supercap_online &&
          _ctx.data.supercap_output_enabled && supercap_voltage_ready)

@@ -69,7 +69,7 @@ static void debug_thread(void *argument)
             vars[0] = d.power_meter_w ;
             vars[1] = d.supercap_voltage_cv * 0.01f;
             vars[2] = d.supercap_extra_power_w;
-            vars[3] = d.supercap_chassis_power_raw/100.0f;
+            vars[3] = d.supercap_chassis_power_raw;
 
             jcom_send(vars);
         }
