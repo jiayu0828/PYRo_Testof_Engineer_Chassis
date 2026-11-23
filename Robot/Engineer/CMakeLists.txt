@@ -29,6 +29,10 @@ pyro_mission_planner.cpp
 #==================== 底盘模块 =====================
 Chassis/pyro_engineer_chassis.cpp
 Chassis/pyro_chassis_leg.cpp
+Chassis/pyro_engineer_chassis_mecanum.cpp
+Chassis/pyro_engineer_chassis_mecanum_power.cpp
+Chassis/pyro_engineer_chassis_mecanum_supercap.cpp
+Chassis/pyro_engineer_chassis_track.cpp
 #==================== 状态机模块 =====================
 Chassis/fsm/pyro_engineer_active_state.cpp
 Chassis/fsm/pyro_engineer_passive_state.cpp

@@ -107,3 +107,8 @@ extern "C" void chassis_remote_init()
     xTaskCreate(chassis_remote_thread, "chassis_rc", 128, nullptr,
                 configMAX_PRIORITIES - 2, nullptr);
 }
+// 辅助臂，主臂，发射模块 几块板子， 
+// UI 问题 
+// 功率 相关问题
+// 底盘自动 上单级台阶 3s   双级台阶    5S   
+// 对接问题 ， 

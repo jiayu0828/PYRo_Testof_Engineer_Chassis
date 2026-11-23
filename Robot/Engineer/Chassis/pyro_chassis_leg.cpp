@@ -6,45 +6,6 @@ namespace pyro
 // =========================================================
 // 腿部机构算法辅助函数
 // =========================================================
-leg_xt_vmc_result_t calc_leg_xiaotan_vmc(float theta_raw, float pitch)
-{
-    leg_xt_vmc_result_t result{};
-
-    // 多项式只在小坦实测拟合域内求值
-    const float theta =
-        fminf(fmaxf(theta_raw, LEG_XT_MIN_POS), LEG_XT_MAX_POS);
-
-    const float cp = cosf(pitch);
-    const float sp = sinf(pitch);
-
-    const float j_x = evaluate_polynomial(
-        theta, LEG_XT_JX_COEF, LEG_XT_JX_DEGREE);
-    const float j_y = evaluate_polynomial(
-        theta, LEG_XT_JY_COEF, LEG_XT_JY_DEGREE);
-    const float x_b = evaluate_polynomial(
-        theta, LEG_XT_XB_COEF, LEG_XT_XB_DEGREE);
-    const float y_b = evaluate_polynomial(
-        theta, LEG_XT_YB_COEF, LEG_XT_YB_DEGREE);
-
-    // 小坦巡航 _leg_vmc() 前轴 O 力平衡
-    const float y_wheel    = y_b - LEG_XT_H_HIP_OFFSET;
-    const float numerator  = LEG_XT_DIST_FRONT * cp - LEG_XT_H_COG * sp;
-    const float denominator =
-        (LEG_XT_DIST_FRONT + LEG_XT_DIST_HIP + x_b) * cp + y_wheel * sp;
-
-    float f_gravity_ff = 0.0f;
-    if (fabsf(denominator) > 1e-4f)
-    {
-        f_gravity_ff =
-            LEG_POLY_VEH_MASS * LEG_GRAVITY * numerator / denominator;
-        result.valid = true;
-    }
-
-    result.j_dynamic   = j_y * cp + j_x * sp;
-    result.tau_gravity = result.j_dynamic * (0.5f * f_gravity_ff);
-    return result;
-}
-
 // 腿失能：输出和积分全部清零，重新使能时不会携带旧力矩或积分冲击。
 void engineer_chassis_t::_leg_handle_disabled(int i)
 {
@@ -89,9 +50,8 @@ void engineer_chassis_t::_leg_handle_uncalibrated(int i)
     _leg_last_logic_torque[i]           = 0.0f;
 }
 
-// =========================================================
+
 // _calibrate_leg()：腿软件置零
-// =========================================================
 void engineer_chassis_t::_calibrate_leg()
 {
 
@@ -122,6 +82,47 @@ void engineer_chassis_t::_calibrate_leg()
     if (_ctx.pid.pitch_pid) _ctx.pid.pitch_pid->clear();
     if (_ctx.pid.roll_pid)  _ctx.pid.roll_pid->clear();
 }
+
+//雅可比 以及腿部 X Y 坐标计算相关
+leg_vmc_result_t calc_leg_xiaotan_vmc(float theta_raw, float pitch)
+{
+    leg_vmc_result_t result{};
+
+    
+    const float theta =
+        fminf(fmaxf(theta_raw, LEG_MIN_POS), LEG_MAX_POS);
+
+    const float cp = cosf(pitch);
+    const float sp = sinf(pitch);
+
+    const float j_x = evaluate_polynomial(
+        theta, LEG_XT_JX_COEF, LEG_XT_JX_DEGREE);
+    const float j_y = evaluate_polynomial(
+        theta, LEG_XT_JY_COEF, LEG_XT_JY_DEGREE);
+    const float x_b = evaluate_polynomial(
+        theta, LEG_XT_XB_COEF, LEG_XT_XB_DEGREE);
+    const float y_b = evaluate_polynomial(
+        theta, LEG_XT_YB_COEF, LEG_XT_YB_DEGREE);
+
+    // 小坦巡航 _leg_vmc() 前轴 O 力平衡
+    const float y_wheel    = y_b - LEG_XT_H_HIP_OFFSET;
+    const float numerator  = LEG_XT_DIST_FRONT * cp - LEG_XT_H_COG * sp;
+    const float denominator =
+        (LEG_XT_DIST_FRONT + LEG_XT_DIST_HIP + x_b) * cp + y_wheel * sp;
+
+    float f_gravity_ff = 0.0f;
+    if (fabsf(denominator) > 1e-4f)
+    {
+        f_gravity_ff =
+            LEG_POLY_VEH_MASS * LEG_GRAVITY * numerator / denominator;
+        result.valid = true;
+    }
+
+    result.j_dynamic   = j_y * cp + j_x * sp;
+    result.tau_gravity = result.j_dynamic * (0.5f * f_gravity_ff);
+    return result;
+}
+
 
 // =========================================================
 // _leg_feedback()：腿反馈（unwrap、校准、IMU）
@@ -239,7 +240,7 @@ void engineer_chassis_t::_leg_update_vmc_feedforward(
     const float theta_eval = fp32_constrain(
         theta_raw, LEG_POLY_THETA_MIN, LEG_POLY_THETA_MAX);
 
-    const leg_xt_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_eval, pitch);
+    const leg_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_eval, pitch);
 
     const bool q_window_ok =
         (q >= LEG_POLY_Q_VALID_MIN && q <= LEG_POLY_Q_VALID_MAX &&

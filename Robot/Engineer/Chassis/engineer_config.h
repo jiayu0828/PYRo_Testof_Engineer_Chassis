@@ -43,45 +43,18 @@ constexpr float MAX_CHASSIS_VY = 3.0f; // 最大左右速度 m/s
 constexpr float MAX_CHASSIS_WZ = 4.5f; // 最大旋转角速度 rad/s
 
 // =========================================================
-// 3. 后腿机械实测参数（SolidWorks/实测，单位 m、rad）
-// 后续使用
-// =========================================================
-constexpr float LEG_B_X = -0.06495f; // 固定铰 B 的车体 x 坐标
-constexpr float LEG_B_Y = -0.03750f; // 固定铰 B 的车体 y 坐标
-constexpr float LEG_C_X = -0.04952f; // 固定铰 C 的车体 x 坐标
-constexpr float LEG_C_Y = -0.19542f; // 固定铰 C 的车体 y 坐标
-
-constexpr float LEG_L_BE = 0.072599f; // 四杆 BE 长度
-constexpr float LEG_L_ED = 0.162674f; // 四杆 ED 长度
-constexpr float LEG_L_DC = 0.038000f; // 四杆 DC 长度
-
-constexpr float LEG_F_LOCAL_X = 0.15567f; // F 点在小腿局部系 x 坐标
-constexpr float LEG_F_LOCAL_Y = 0.0f;     // F 点在小腿局部系 y 坐标
-constexpr float LEG_W_LOCAL_X = 0.21524f; // 轮心 W 在小腿局部系 x 坐标
-constexpr float LEG_W_LOCAL_Y = 0.04014f; // 轮心 W 在小腿局部系 y 坐标
-
-constexpr int LEG_BRANCH = -1; // 装配分支（实测 D 对应 -1）
-
-// 达妙反馈为电机输出轴角；外部仅计电机输出轴 24T -> 曲柄 48T 齿轮级。
-// 若端到端实测电机角/曲柄角不是约 2.0，应以实测值覆盖，禁止再按旧 CAD 推断叠加同步带。
-constexpr float LEG_EXTERNAL_RATIO = 2.0f;
-
-// 校准位（相对角 0）对应的绝对曲柄角：完全收起的内切死点 225.89°
-constexpr float LEG_CAL_ALPHA = 3.94250156f;
-
-// =========================================================
-// 4. 后腿电机、手动模式与输出安全参数
+// 3. 后腿电机、手动模式与输出安全参数
 // =========================================================
 constexpr float LEG_MAX_TORQUE = 27.0f;  // 腿电机最终输出力矩上限 N·m
 constexpr float LEG_MAX_SPEED  = 5.655f; // 腿电机输出轴速度上限 rad/s
 
-// 腿部软件校准点（电机多圈绝对角 rad，用户实车标定；_calibrate_leg 使用）
+// 腿部软件校准点
 constexpr float LEG_CALI_LEFT  = 1.03348756f;  // 左腿校准位绝对角
 constexpr float LEG_CALI_RIGHT = -1.18842185f; // 右腿校准位绝对角
 
-// 手动控腿行程（电机输出轴相对角，rad）：校准收起位为 0，放下方向为负
+// 手动控腿行程
 constexpr float LEG_MANUAL_MAX = 0.0f;
-constexpr float LEG_MANUAL_MIN = -2.28f;
+constexpr float LEG_MANUAL_MIN = -1.64f;//??
 
 constexpr float LEG_TARGET_LERP = 0.02f; // 手动目标角一阶平滑系数
 
@@ -127,19 +100,21 @@ constexpr float LEG_POLY_WALL_D   = 8.0f;
 constexpr float LEG_POLY_WALL_MAX = 8.0f;
 
 // 小坦巡航力平衡几何参数（来自小坦 hybrid_config.h）
-constexpr float LEG_XT_MIN_POS      = 0.15f;
-constexpr float LEG_XT_MAX_POS      = 1.64f;
+constexpr float LEG_MIN_POS      = 0.15f;//需要读数确认
+constexpr float LEG_MAX_POS      = 1.64f;//需要读数确认
+
 constexpr float LEG_XT_DIST_FRONT   = 0.2395f;
 constexpr float LEG_XT_DIST_HIP     = 0.1805f;
 constexpr float LEG_XT_H_COG        = 0.18f;
 constexpr float LEG_XT_H_HIP_OFFSET = 0.074f;
+//先这样吧
 
 // 小坦 JX/JY/XB/YB 多项式系数
 constexpr uint32_t LEG_XT_JX_DEGREE = 7;
 constexpr uint32_t LEG_XT_JY_DEGREE = 5;
 constexpr uint32_t LEG_XT_XB_DEGREE = 6;
 constexpr uint32_t LEG_XT_YB_DEGREE = 4;
-
+//已经会推导了
 constexpr float LEG_XT_JX_COEF[LEG_XT_JX_DEGREE + 1] = {
     -0.0742f, 0.3986f, -0.8740f, 0.9990f,
     -0.6561f, 0.2485f, -0.0279f, -0.0072f};
@@ -155,9 +130,7 @@ constexpr float LEG_XT_XB_COEF[LEG_XT_XB_DEGREE + 1] = {
 constexpr float LEG_XT_YB_COEF[LEG_XT_YB_DEGREE + 1] = {
     -0.0056f, 0.0311f, -0.0793f, 0.1957f, 0.0745f};
 
-// Pitch/Roll 姿态环参数归属：
-// - PID 增益、限幅、滤波：pyro_chassis_app.cpp 的 pitch_pid/roll_pid 构造函数；
-// - 目标角、使能开关：腿部 VMC 状态文件与本配置头共同使用。
+//相关姿态补偿  感觉Pitch 可以调整一下，来适配老左的履带的角度 
 constexpr bool  LEG_ATTITUDE_PID_EN   = true;
 constexpr float LEG_TARGET_PITCH_RAD = 0.10f; // rad
 constexpr float LEG_TARGET_ROLL_RAD  = 0.0f;  // rad
