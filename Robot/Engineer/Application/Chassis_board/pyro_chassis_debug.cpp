@@ -3,10 +3,10 @@
  * @brief Engineer 底盘调试任务：超级电容 JustFloat 观测输出（UART1）
  *
  * 当前调试通道固定为 4 个 float（10 ms/帧，小端）：
- *   CH1  supercap_online_f   电容板在线状态，0.0f/1.0f
- *   CH2  cap_voltage_V       电容电压，按当前固件 0.01 V/LSB 口径换算为 V
- *   CH3  cap_power_raw       电容板回传 cap_power_cap 原始值（驱动未缩放）
- *   CH4  chassis_power_raw   电容板回传 chassis_power_cap 原始值（驱动未缩放）
+ *   CH1  power_meter_w       CAN 功率计功率
+ *   CH2  cap_voltage_V       电容电压
+ *   CH3  cap_extra_power_W   投入麦轮功控的电容额外功率
+ *   CH4  chassis_power_W     电容板 ADC 测得的底盘功率
  *
  * 超级电容反馈来自 UART7；本任务只通过 UART1 发送观测数据，不参与控制闭环。
  */
@@ -66,10 +66,10 @@ static void debug_thread(void *argument)
             const auto &ctx = s_chassis->get_ctx();
             const auto &d   = ctx.data;
 
-            vars[0] = d.power_meter_w ;
-            vars[1] = d.supercap_voltage_cv * 0.01f;
-            vars[2] = d.supercap_extra_power_w;
-            vars[3] = d.supercap_chassis_power_raw;
+            vars[0] = d.power_meter_w;
+            vars[1] = ctx.supercap.voltage_v;
+            vars[2] = ctx.supercap.extra_power_w;
+            vars[3] = ctx.supercap.chassis_power_w;
 
             jcom_send(vars);
         }

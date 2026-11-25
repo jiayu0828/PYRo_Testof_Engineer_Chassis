@@ -238,14 +238,14 @@ void engineer_chassis_t::_leg_update_vmc_feedforward(
 
     const float theta_raw  = LEG_Q_XT_SIGN * q + LEG_POLY_THETA_OFFSET;
     const float theta_eval = fp32_constrain(
-        theta_raw, LEG_POLY_THETA_MIN, LEG_POLY_THETA_MAX);
+        theta_raw, LEG_MIN_POS, LEG_MAX_POS);
 
     const leg_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_eval, pitch);
 
     const bool q_window_ok =
         (q >= LEG_POLY_Q_VALID_MIN && q <= LEG_POLY_Q_VALID_MAX &&
-         theta_raw >= LEG_POLY_THETA_MIN &&
-         theta_raw <= LEG_POLY_THETA_MAX);
+         theta_raw >= LEG_MIN_POS &&
+         theta_raw <= LEG_MAX_POS);
 
     // theta 帧重力矩按线性坐标变换映射回 q 帧；
     // 左右腿物理镜像统一留给发送边界的 LEG_MOTOR_SIGN。

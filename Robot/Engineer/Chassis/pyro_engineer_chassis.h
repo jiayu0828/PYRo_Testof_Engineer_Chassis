@@ -111,7 +111,25 @@ struct engineer_deps_t
 };
 
 // =========================================================
-// 3. 上下文数据定义
+// 3. 超级电容应用层运行时
+// =========================================================
+struct engineer_supercap_runtime_t
+{
+    bool enabled{false};
+    bool voltage_ready{false};
+
+    float voltage_v{0.0f};
+    float cap_power_w{0.0f};
+    float chassis_power_w{0.0f};
+    float extra_power_w{0.0f};
+
+    uint32_t enable_timer{0U};
+    uint32_t refresh_timer{0U};
+    uint32_t disable_timer{0U};
+};
+
+// =========================================================
+// 4. 上下文数据定义
 // =========================================================
 struct engineer_data_ctx_t
 {
@@ -176,19 +194,6 @@ struct engineer_data_ctx_t
     float    power_meter_voltage{}; // 功率计电压 V
     uint32_t power_meter_rx_count{}; // 成功解析帧数，用于判断 CAN 接收是否存活
 
-    // ---- UART 超级电容板（只参与四轮麦轮功控，不控制履带/腿）----
-    bool     supercap_online{};               // 电容板串口协议在线
-    bool     supercap_cmd_use_cap{};          // 最近一次发送给电容板的 use_cap
-    bool     supercap_output_enabled{};       // 使能延时完成，正在周期发送 use_cap=1
-    bool     supercap_extra_power_allowed{};  // 在线且电压滞回允许向功控加功率
-    float    supercap_extra_power_w{};        // 本周期传入 solve() 的额外功率 W
-    float    supercap_cap_power_raw{};        // 电容充放电功率原始值（协议未另做缩放）
-    float    supercap_chassis_power_raw{};    // 电容板 ADC 底盘功率原始值
-    float    supercap_voltage_cv{};           // 电容电压原始值；参考工程按 0.01 V 口径使用
-    uint8_t  supercap_error_flag{};           // 电容板故障标志
-    uint8_t  supercap_low_flag{};             // 低电量标志
-    uint8_t  supercap_over_current_flag{};    // 过流/额定电流标志
-    uint32_t supercap_tx_count{};             // 成功发送命令帧计数
 };
 
 // 完整上下文
@@ -198,8 +203,7 @@ struct engineer_context_t
     engineer_deps_t::pid_deps_t   pid;
     powermeter_drv_t             *powermeter{nullptr};
     powermeter_data               powermeter_feedback{};
-    supercap_drv_t::chassis_cmd_t supercap_tx_cmd{};
-    supercap_drv_t::cap_feedback_t supercap_rx_feedback{};
+    engineer_supercap_runtime_t   supercap{};
     power_node_t                 *mecanum_power_node[4]{nullptr}; // 四麦轮共用同一组拟合参数
     engineer_data_ctx_t           data;
 
@@ -207,7 +211,7 @@ struct engineer_context_t
 };
 
 // =========================================================
-// 4. ModuleParams 聚合体（两参数版本必须）
+// 5. ModuleParams 聚合体（两参数版本必须）
 // =========================================================
 struct engineer_params_t
 {
@@ -217,7 +221,7 @@ struct engineer_params_t
 };
 
 // =========================================================
-// 5. 工程车底盘类（两参数版本）
+// 6. 工程车底盘类（两参数版本）
 // =========================================================
 class engineer_chassis_t final
     : public module_base_t<engineer_chassis_t, engineer_params_t>

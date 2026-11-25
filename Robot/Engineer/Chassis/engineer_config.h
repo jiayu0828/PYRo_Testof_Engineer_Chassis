@@ -85,9 +85,7 @@ constexpr float LEG_POLY_VEH_MASS   = 20.0f;     // 当前 VMC 链使用的整�
 constexpr float LEG_Q_XT_SIGN       = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
 constexpr float LEG_POLY_THETA_OFFSET = 0.0f;
 
-// 小坦多项式有效拟合域与本车 q 对应窗口
-constexpr float LEG_POLY_THETA_MIN = 0.15f;
-constexpr float LEG_POLY_THETA_MAX = 1.64f;
+// 小坦多项式有效拟合域与本车 q 对应窗口；theta 上下限复用 LEG_MIN_POS/LEG_MAX_POS。
 constexpr float LEG_POLY_Q_VALID_MIN = -1.64f; // q 有效窗下限，对应 theta=1.64
 constexpr float LEG_POLY_Q_VALID_MAX = -0.15f; // q 有效窗上限，对应 theta=0.15
 

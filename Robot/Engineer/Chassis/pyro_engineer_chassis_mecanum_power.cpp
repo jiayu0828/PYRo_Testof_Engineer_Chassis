@@ -1,9 +1,6 @@
 /**
  * @file pyro_engineer_chassis_mecanum_power.cpp
- * @brief 四个麦轮的模型功率控制与功率节点初始化（成员函数实现分片）。
- *
- * 方案 A 文件拆分：函数定义从 pyro_engineer_chassis.cpp 原样剪切；
- * 类声明仍位于 pyro_engineer_chassis.h，控制逻辑不在纯搬运提交中改变。
+ * @brief 四个麦轮的模型功率控制、功率节点初始化与超级电容额外功率接入。
  */
 #include "pyro_engineer_chassis.h"
 #include <cmath>
@@ -62,9 +59,11 @@ void engineer_chassis_t::_mecanum_power_control()
     constexpr float default_buffer_energy_j   = 60.0f; // 无裁判系统时的虚拟缓冲能量 J
     constexpr float scale_valid_cmd_threshold = 0.001f; // 判断实际缩放/介入的最小指令差
     constexpr float default_cap_extra_power_w     = 150.0f;  // 超级电容额外功率口径 W（裁判系统未启用时）
-    _ctx.data.wheel_power_control_active  = false;
-    _ctx.data.wheel_power_total_w         = 0.0f;
-    _ctx.data.supercap_extra_power_allowed = false;
+    auto &cap_runtime = _ctx.supercap;
+
+    _ctx.data.wheel_power_control_active = false;
+    _ctx.data.wheel_power_total_w        = 0.0f;
+    cap_runtime.extra_power_w            = 0.0f;
 
     if (!power_control_en)
     {
@@ -113,48 +112,62 @@ void engineer_chassis_t::_mecanum_power_control()
     }
 
     // 2. 超级电容额外功率口径：
-    //    电容板在线、状态机已周期发送 use_cap=1，且电容电压高于使能门限后，
-    //    才给四轮麦轮功控放宽一个固定功率；电压低于回差门限立即收回。
-    constexpr bool  supercap_extra_power_en       = true;//先关掉超级电容
-    constexpr float supercap_enable_voltage_cv    = 1900.0f; // 19.00 V
-    constexpr float supercap_disable_voltage_cv   = 1750.0f; // 17.50 V，滞回防抖
-    static bool     supercap_voltage_ready        = false;
+    //    电容板在线、应用层状态机已使能，且电容电压高于门限后，
+    //    才给四轮麦轮功控放宽功率；电压低于回差门限立即收回。
+#ifdef SUPERCAP_UART
+    supercap_drv_t *supercap = supercap_drv_t::get_instance();
+    const bool supercap_online = supercap->check_online();
+    const auto &cap_fb = supercap->get_feedback();
+#else
+    const bool supercap_online = false;
+#endif
 
-    if (!supercap_extra_power_en || !_ctx.data.supercap_online || !_ctx.data.supercap_output_enabled)
+    constexpr bool  supercap_extra_power_en     = true;
+    constexpr float supercap_enable_voltage_v   = 19.0f;
+    constexpr float supercap_disable_voltage_v  = 17.5f; // 滞回防抖
+
+    if (!supercap_extra_power_en || !supercap_online || !cap_runtime.enabled)
     {
-        supercap_voltage_ready = false;
+        cap_runtime.voltage_ready = false;
     }
-    else if (_ctx.data.supercap_voltage_cv >= supercap_enable_voltage_cv)
+    else if (cap_runtime.voltage_v >= supercap_enable_voltage_v)
     {
-        supercap_voltage_ready = true;
+        cap_runtime.voltage_ready = true;
     }
-    else if (_ctx.data.supercap_voltage_cv <= supercap_disable_voltage_cv)
+    else if (cap_runtime.voltage_v <= supercap_disable_voltage_v)
     {
-        supercap_voltage_ready = false; 
+        cap_runtime.voltage_ready = false;
     }
-    if(_ctx.data.supercap_error_flag == 1U){
+
+#ifdef SUPERCAP_UART
+    if (cap_fb.error_flag == 1U)
+    {
         auto &warning = warning_drv_t::instance();
         warning.set_buzzer_warning_level(
-        warning_drv_t::buzzer_warning_level_t::WARNING_LEVEL_3);
-    }//如果有error_flag 直接报警
-    else{
-        auto &warning = warning_drv_t::instance();
-        warning.set_buzzer_warning_level(warning_drv_t::buzzer_warning_level_t::NONE); 
-    }//如果清除了error_flg 就先不管它了
-    if(_ctx.data.supercap_chassis_power_raw > 100.0f){
+            warning_drv_t::buzzer_warning_level_t::WARNING_LEVEL_3);
+    }
+    else
+    {
         auto &warning = warning_drv_t::instance();
         warning.set_buzzer_warning_level(
-        warning_drv_t::buzzer_warning_level_t::WARNING_LEVEL_2);
-    }//但如果无论有无error_flag 功率没控住就直接报警
+            warning_drv_t::buzzer_warning_level_t::NONE);
+    }
+
+    if (cap_runtime.chassis_power_w > 100.0f)
+    {
+        auto &warning = warning_drv_t::instance();
+        warning.set_buzzer_warning_level(
+            warning_drv_t::buzzer_warning_level_t::WARNING_LEVEL_2);
+    }
+#endif
 
     const float cap_extra_power_w =
-        (supercap_extra_power_en && _ctx.data.supercap_online &&
-         _ctx.data.supercap_output_enabled && supercap_voltage_ready)
-            ? default_cap_extra_power_w + _ctx.data.supercap_cap_power_raw
+        (supercap_extra_power_en && supercap_online &&
+         cap_runtime.enabled && cap_runtime.voltage_ready)
+            ? default_cap_extra_power_w + cap_runtime.cap_power_w
             : 0.0f;
 
-    _ctx.data.supercap_extra_power_allowed = cap_extra_power_w > 0.0f;
-    _ctx.data.supercap_extra_power_w       = cap_extra_power_w;
+    cap_runtime.extra_power_w = cap_extra_power_w;
 
     // 3. 四节点共用一个总功率求解器；第三参为电容端允许补充的总功率 W。
     auto &power_controller = power_controller_t::get_instance();
@@ -186,9 +199,5 @@ void engineer_chassis_t::_mecanum_power_control()
         }
     }
 }
-
-// =========================================================
-// _supercap_control()：超级电容板命令组装、使能状态机和周期发送
-// 主动/被动 FSM 都调用：主动状态满足条件后使能电容，被动状态延时发 use_cap=0。
 
 } // namespace pyro

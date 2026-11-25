@@ -112,23 +112,20 @@ void engineer_chassis_t::_update_feedback()
     }
 
 #ifdef SUPERCAP_UART
-    // ---- 超级电容板：驱动任务完成 CRC/解包，控制任务只拷贝最新帧 ----
+    // ---- 超级电容板：协议原始帧由驱动维护，这里只保存应用层使用的物理量 ----
     supercap_drv_t *supercap = supercap_drv_t::get_instance();
     if (supercap != nullptr)
     {
-        _ctx.supercap_rx_feedback = supercap->get_feedback();
-        const auto &cap_fb        = _ctx.supercap_rx_feedback;
+        const auto &cap_fb = supercap->get_feedback();
+        auto &cap_runtime = _ctx.supercap;
 
-        _ctx.data.supercap_online            = supercap->check_online();
-        _ctx.data.supercap_cap_power_raw     = static_cast<float>(cap_fb.cap_power_cap)/100.0f - 250.0f;
-        _ctx.data.supercap_chassis_power_raw = static_cast<float>(cap_fb.chassis_power_cap)/100.0f;
-        _ctx.data.supercap_voltage_cv        = static_cast<float>(cap_fb.vot_cap);
-        _ctx.data.supercap_error_flag        = cap_fb.error_flag;
-        _ctx.data.supercap_low_flag          = cap_fb.cap_low_flag;
-        _ctx.data.supercap_over_current_flag = cap_fb.over_normal_c_l;
+        cap_runtime.cap_power_w =
+            static_cast<float>(cap_fb.cap_power_cap) / 100.0f - 250.0f;
+        cap_runtime.chassis_power_w =
+            static_cast<float>(cap_fb.chassis_power_cap) / 100.0f;
+        cap_runtime.voltage_v =
+            static_cast<float>(cap_fb.vot_cap) * 0.01f;
     }
-#else
-    _ctx.data.supercap_online = false;
 #endif
 }
 
