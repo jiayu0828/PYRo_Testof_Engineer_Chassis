@@ -61,9 +61,9 @@ void engineer_chassis_t::_mecanum_power_control()
     constexpr float default_cap_extra_power_w     = 150.0f;  // 超级电容额外功率口径 W（裁判系统未启用时）
     auto &cap_runtime = _ctx.supercap;
 
-    _ctx.data.wheel_power_control_active = false;
-    _ctx.data.wheel_power_total_w        = 0.0f;
-    cap_runtime.extra_power_w            = 0.0f;
+    _ctx.telemetry.wheel_power_control_active = false;
+    _ctx.telemetry.wheel_power_total_w        = 0.0f;
+    cap_runtime.extra_power_w                 = 0.0f;
 
     if (!power_control_en)
     {
@@ -97,11 +97,11 @@ void engineer_chassis_t::_mecanum_power_control()
     _ctx.data.wheel_power_buffer_energy_j = buffer_energy_j;
 
     // 1. 填入四个麦轮节点；uncontrolled_cmd=0 表示麦轮 PID 输出全部受控。
+    float raw_wheel_cmd[4]{};
     for (int i = 0; i < 4; ++i)
     {
-        _ctx.data.wheel_cmd_before_power_ctrl[i] = _ctx.data.out_wheel_torque[i];
-        _ctx.data.wheel_cmd_after_power_ctrl[i]  = _ctx.data.out_wheel_torque[i];
-        _ctx.data.wheel_power_scale[i]            = 1.0f;
+        raw_wheel_cmd[i] = _ctx.data.out_wheel_torque[i];
+        _ctx.telemetry.wheel_power_scale[i] = 1.0f;
 
         power_node_t *node = _ctx.mecanum_power_node[i];
 
@@ -178,24 +178,23 @@ void engineer_chassis_t::_mecanum_power_control()
     {
         power_node_t *node = _ctx.mecanum_power_node[i];
 
-        _ctx.data.out_wheel_torque[i]                = node->safe_cmd;
-        _ctx.data.wheel_cmd_after_power_ctrl[i]      = node->safe_cmd;
-        _ctx.data.wheel_power_predict_w[i]           = node->power_predict;
-        _ctx.data.wheel_power_total_w               += node->power_predict;
+        _ctx.data.out_wheel_torque[i] = node->safe_cmd;
+        _ctx.telemetry.wheel_power_predict_w[i] = node->power_predict;
+        _ctx.telemetry.wheel_power_total_w += node->power_predict;
 
-        const float raw_cmd = _ctx.data.wheel_cmd_before_power_ctrl[i];
+        const float raw_cmd = raw_wheel_cmd[i];
         if (fabsf(raw_cmd) > scale_valid_cmd_threshold)
         {
-            _ctx.data.wheel_power_scale[i] = node->safe_cmd / raw_cmd;
+            _ctx.telemetry.wheel_power_scale[i] = node->safe_cmd / raw_cmd;
         }
         else
         {
-            _ctx.data.wheel_power_scale[i] = 1.0f;
+            _ctx.telemetry.wheel_power_scale[i] = 1.0f;
         }
 
         if (fabsf(node->safe_cmd - raw_cmd) > scale_valid_cmd_threshold)
         {
-            _ctx.data.wheel_power_control_active = true;
+            _ctx.telemetry.wheel_power_control_active = true;
         }
     }
 }

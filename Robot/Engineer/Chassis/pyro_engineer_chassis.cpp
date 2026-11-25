@@ -78,7 +78,6 @@ void engineer_chassis_t::_update_feedback()
             static_cast<float>(MECANUM_MOTOR_SIGN[i]) * wheel_motor_rpm;
         _ctx.data.current_wheel_temp[i] =
             static_cast<float>(_ctx.motor.mecanum[i]->get_temperature());
-        _ctx.data.wheel_online[i] = _ctx.motor.mecanum[i]->is_online();
     }
 
     // ---- 履带电机反馈（达妙 4310，输出轴 rad/s，不除减速比）----
@@ -91,7 +90,6 @@ void engineer_chassis_t::_update_feedback()
             radps_to_rpm(_ctx.motor.track[i]->get_current_rotate());
         _ctx.data.current_track_rpm[i] =
             static_cast<float>(TRACK_MOTOR_SIGN[i]) * track_motor_rpm;
-        _ctx.data.track_online[i] = _ctx.motor.track[i]->is_online();
     }
 
     // ---- 腿部反馈、校准与 IMU ----

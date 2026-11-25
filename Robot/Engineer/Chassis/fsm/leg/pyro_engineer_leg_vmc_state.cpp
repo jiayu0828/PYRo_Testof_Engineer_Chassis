@@ -41,8 +41,8 @@ void engineer_chassis_t::leg_state_vmc_t::execute(owner *chassis)
         if (chassis->_ctx.pid.roll_pid)  chassis->_ctx.pid.roll_pid->clear();
     }
 
-    chassis->_ctx.data.att_force_pitch = f_pitch;
-    chassis->_ctx.data.att_force_roll  = f_roll;
+    chassis->_ctx.telemetry.att_force_pitch = f_pitch;
+    chassis->_ctx.telemetry.att_force_roll  = f_roll;
 
     for (int i = 0; i < 2; ++i)
     {
@@ -54,8 +54,8 @@ void engineer_chassis_t::leg_state_vmc_t::execute(owner *chassis)
         chassis->_leg_target_smooth[i]            = q;
         chassis->_ctx.data.target_leg_theta[i]   = q;
         chassis->_ctx.data.target_leg_radps[i]   = 0.0f;
-        chassis->_ctx.data.leg_tau_manual_pid[i] = 0.0f;
-        chassis->_ctx.data.leg_control_mode[i]   = 2.0f;
+        chassis->_ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
+        chassis->_ctx.telemetry.leg_control_mode[i]   = 2.0f;
 
         chassis->_leg_update_vmc_feedforward(
             i, q, qdot, pitch, attitude_active, f_pitch, f_roll);

@@ -129,89 +129,95 @@ struct engineer_supercap_runtime_t
 };
 
 // =========================================================
-// 4. 上下文数据定义
+// 4. 调试遥测数据（只用于 Live Watch / JustFloat，不参与控制闭环）
+// =========================================================
+struct engineer_debug_telemetry_t
+{
+    // ---- 四麦轮模型功控观察量 ----
+    float wheel_power_predict_w[4]{};  // 各麦轮模型预测功率 W
+    float wheel_power_scale[4]{};      // safe/raw，便于观察限幅比例
+    float wheel_power_total_w{};       // 四麦轮预测总功率 W
+    bool  wheel_power_control_active{}; // 本周期是否有麦轮指令被明显缩放
+
+    // ---- 腿部 VMC/PID 观察量 ----
+    float leg_alpha[2]{};              // 当前送入小坦多项式的 theta_XT（rad）
+    bool  leg_gravity_valid[2]{};      // 重力前馈是否有效
+    float leg_j_dynamic[2]{};          // 当前姿态下的动态雅可比标量
+    float leg_tau_damping[2]{};        // q 空间主动阻尼力矩 N·m
+    float leg_ff_scale[2]{};           // 重力/软墙前馈投入标志（1=投入，0=纯 PID）
+    float leg_tau_manual_pid[2]{};     // MID/DOWN 双环 PID 输出力矩 N·m
+    float leg_control_mode[2]{};       // 0/1/2/3 腿控模式观察值
+    float att_force_pitch{};           // Pitch PID 输出的任务空间虚拟力 N
+    float att_force_roll{};            // Roll PID 输出的左右差动力 N
+
+    // ---- IMU 原始姿态；控制使用 data 中的滤波值 ----
+    float imu_pitch_raw{};
+    float imu_roll_raw{};
+};
+
+// =========================================================
+// 5. 控制上下文数据
 // =========================================================
 struct engineer_data_ctx_t
 {
     // ---- 4 个麦轮（索引 [0]=FL, [1]=FR, [2]=BL, [3]=BR）----
-    bool  wheel_online[4]{};
-    float current_wheel_rpm[4]{}; // 反馈：轮轴 RPM（逻辑正方向）
-    float target_wheel_rpm[4]{};  // 目标：轮轴 RPM
-    float out_wheel_torque[4]{};  // 功控后最终麦轮指令标称量（发送边界再乘电机方向）
-    float current_wheel_temp[4]{}; // M3508 电调反馈温度 ℃
+    float current_wheel_rpm[4]{};      // 反馈：轮轴 RPM（逻辑正方向）
+    float target_wheel_rpm[4]{};       // 目标：轮轴 RPM
+    float out_wheel_torque[4]{};       // 最终麦轮指令标称量（发送边界再乘电机方向）
+    float current_wheel_temp[4]{};     // M3508 电调反馈温度 ℃
 
-    // ---- 四麦轮模型功控中间量（仅作用于麦轮，不影响履带/腿）----
-    float    wheel_cmd_before_power_ctrl[4]{}; // 麦轮 PID 原始输出
-    float    wheel_cmd_after_power_ctrl[4]{};  // 功控缩放/滤波后的输出
-    float    wheel_power_predict_w[4]{};       // 各麦轮模型预测功率 W
-    float    wheel_power_scale[4]{};           // after/before，便于观察限幅比例
-    float    wheel_power_total_w{};            // 四麦轮预测总功率 W
-    float    wheel_power_limit_w{};            // 当前生效总功率上限 W
-    float    wheel_power_buffer_energy_j{};    // 当前功控使用的缓冲能量 J
-    bool     wheel_power_control_active{};     // 本周期是否有麦轮指令被明显缩放
+    // ---- 四麦轮功控边界：超级电容发送函数会读取 ----
+    float wheel_power_limit_w{};       // 当前生效总功率上限 W
+    float wheel_power_buffer_energy_j{}; // 当前功控使用的缓冲能量 J
 
     // ---- 2 个履带（索引 [0]=L, [1]=R）----
-    bool  track_online[2]{};
-    float current_track_rpm[2]{}; // 反馈：履带驱动轮 RPM（逻辑正方向）
-    float target_track_rpm[2]{};  // 目标：履带驱动轮 RPM
-    float out_track_torque[2]{};  // 输出力矩
+    float current_track_rpm[2]{};      // 反馈：履带驱动轮 RPM（逻辑正方向）
+    float target_track_rpm[2]{};       // 目标：履带驱动轮 RPM
+    float out_track_torque[2]{};       // 输出力矩
 
     // ---- 2 条腿（索引 [0]=L, [1]=R）----
-    bool  leg_online[2]{};
-    float leg_raw_position[2]{};      // 电机原始单圈角 rad
-    float leg_theta_unwrap[2]{};      // 电机输出轴多圈角（连续，rad）
-    float leg_theta_cal[2]{};         // 校准时的电机多圈角基准
-    float current_leg_theta[2]{};     // 相对电机角（校准点为 0，rad）
-    float current_leg_radps[2]{};     // 电机输出轴角速度 rad/s
-    float target_leg_theta[2]{};      // 目标相对电机角：MID 来自摇杆映射，DOWN 为限速回零参考
-    float target_leg_radps[2]{};      // 位置环输出的目标角速度
-    float out_leg_torque[2]{};        // 最终输出逻辑力矩 N·m
-    float out_leg_gravity_torque[2]{}; // UP/MID 重力前馈力矩（q 逻辑坐标系，N·m）；DOWN 纯 PID 时为 0
-    bool  leg_calibrated[2]{};        // 是否已校准
+    float leg_theta_unwrap[2]{};       // 电机输出轴多圈角（连续，rad）
+    float leg_theta_cal[2]{};          // 校准时的电机多圈角基准
+    float current_leg_theta[2]{};      // 相对电机角（校准点为 0，rad）
+    float current_leg_radps[2]{};      // 电机输出轴角速度 rad/s
+    float target_leg_theta[2]{};       // 目标相对电机角
+    float target_leg_radps[2]{};       // 位置环输出的目标角速度
+    float out_leg_torque[2]{};         // 最终输出逻辑力矩 N·m
+    float out_leg_gravity_torque[2]{}; // 重力前馈力矩（q 逻辑坐标系，N·m）
+    float leg_tau_wall[2]{};           // q 空间软墙力矩 N·m
+    float leg_tau_attitude[2]{};       // Pitch/Roll 姿态映射后的 q 帧力矩 N·m
+    bool  leg_calibrated[2]{};         // 是否已校准
 
-    // ---- 腿部 VMC/调试中间量（供 JustFloat 和 Live Watch 核查）----
-    float leg_alpha[2]{};           // 当前送入小坦多项式的 theta_XT（rad）
-    bool  leg_gravity_valid[2]{};   // 重力前馈是否有效
-    float leg_j_dynamic[2]{};       // 当前姿态下的动态雅可比标量
-    float leg_tau_wall[2]{};        // q 空间软墙力矩 N·m
-    float leg_tau_damping[2]{};     // q 空间主动阻尼力矩 N·m
-    float leg_ff_scale[2]{};        // 重力/软墙前馈投入标志（1=投入，0=纯 PID）
-    float leg_tau_manual_pid[2]{};  // MID/DOWN 双环 PID 输出力矩 N·m（字段名保留以便观察）
-    float leg_tau_attitude[2]{};    // Pitch/Roll 姿态 PID 映射后的 q 帧力矩 N·m
-    float leg_control_mode[2]{};    // 0=失能/未校准，1=DOWN 纯双环回零，2=UP VMC，3=MID 双环+重力前馈
-    float att_force_pitch{};        // Pitch PID 输出的任务空间虚拟力 N
-    float att_force_roll{};         // Roll PID 输出的左右差动力 N
-
-    // ---- IMU：原始值和滤波值同时保留，控制只使用滤波值 ----
-    float imu_pitch_raw{};
+    // ---- IMU 滤波姿态：腿部控制实际读取 ----
     float imu_pitch{};
-    float imu_roll_raw{};
     float imu_roll{};
 
-    // ---- 0x212 CAN 功率计（标定采集；当前不做功率限制输出）----
-    float    power_meter_w{};       // 功率计解析功率 W
-    float    power_meter_current{}; // 功率计电流 A
-    float    power_meter_voltage{}; // 功率计电压 V
-    uint32_t power_meter_rx_count{}; // 成功解析帧数，用于判断 CAN 接收是否存活
-
-};
-
-// 完整上下文
-struct engineer_context_t
-{
-    engineer_deps_t::motor_deps_t motor;
-    engineer_deps_t::pid_deps_t   pid;
-    powermeter_drv_t             *powermeter{nullptr};
-    powermeter_data               powermeter_feedback{};
-    engineer_supercap_runtime_t   supercap{};
-    power_node_t                 *mecanum_power_node[4]{nullptr}; // 四麦轮共用同一组拟合参数
-    engineer_data_ctx_t           data;
-
-    engineer_cmd_t *cmd{nullptr}; // 当前命令指针
+    // ---- 0x212 CAN 功率计（本轮按要求不处理）----
+    float    power_meter_w{};          // 功率计解析功率 W
+    float    power_meter_current{};    // 功率计电流 A
+    float    power_meter_voltage{};    // 功率计电压 V
+    uint32_t power_meter_rx_count{};   // 成功解析帧数，用于判断 CAN 接收是否存活
 };
 
 // =========================================================
-// 5. ModuleParams 聚合体（两参数版本必须）
+// 6. 完整上下文
+// =========================================================
+struct engineer_context_t
+{
+    engineer_deps_t::motor_deps_t   motor;
+    engineer_deps_t::pid_deps_t     pid;
+    powermeter_drv_t               *powermeter{nullptr};
+    powermeter_data                 powermeter_feedback{};
+    engineer_supercap_runtime_t     supercap{};
+    power_node_t                   *mecanum_power_node[4]{nullptr};
+    engineer_debug_telemetry_t      telemetry{};
+    engineer_data_ctx_t             data;
+
+    engineer_cmd_t *cmd{nullptr};
+};
+
+// =========================================================
+// 7. ModuleParams 聚合体（两参数版本必须）
 // =========================================================
 struct engineer_params_t
 {
@@ -221,7 +227,7 @@ struct engineer_params_t
 };
 
 // =========================================================
-// 6. 工程车底盘类（两参数版本）
+// 8. 工程车底盘类（两参数版本）
 // =========================================================
 class engineer_chassis_t final
     : public module_base_t<engineer_chassis_t, engineer_params_t>

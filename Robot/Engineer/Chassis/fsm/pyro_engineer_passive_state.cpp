@@ -8,7 +8,7 @@ namespace pyro
 
 void engineer_chassis_t::state_passive_t::enter(owner *owner)
 {
-    // 进入被动状态：禁用电机、清零数据、清空 PID
+    // 进入被动状态：禁用电机、清零控制边界、清空 PID
     for (auto *motor : owner->_ctx.motor.mecanum)
     {
         if (motor) motor->disable();
@@ -17,10 +17,7 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     {
         owner->_ctx.data.target_wheel_rpm[i] = 0.0f;
         owner->_ctx.data.out_wheel_torque[i] = 0.0f;
-        owner->_ctx.data.wheel_cmd_before_power_ctrl[i] = 0.0f;
-        owner->_ctx.data.wheel_cmd_after_power_ctrl[i]  = 0.0f;
-        owner->_ctx.data.wheel_power_scale[i]           = 1.0f;
-        owner->_mec_en_state[i] = false;
+        owner->_mec_en_state[i]              = false;
 
         if (owner->_ctx.mecanum_power_node[i] != nullptr)
         {
@@ -30,8 +27,6 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
             power_node->last_controlled_cmd = 0.0f;
         }
     }
-    owner->_ctx.data.wheel_power_total_w        = 0.0f;
-    owner->_ctx.data.wheel_power_control_active = false;
     for (auto *pid : owner->_ctx.pid.mecanum_pid)
     {
         if (pid) pid->clear();
@@ -46,42 +41,38 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
     {
         owner->_ctx.data.target_track_rpm[i] = 0.0f;
         owner->_ctx.data.out_track_torque[i] = 0.0f;
-        owner->_track_en_state[i] = false;
+        owner->_track_en_state[i]            = false;
     }
     for (auto *pid : owner->_ctx.pid.track_pid)
     {
         if (pid) pid->clear();
     }
 
-    // 腿去使能、数据清零、清 PID
+    // 腿去使能、控制数据清零、清 PID
     for (auto *motor : owner->_ctx.motor.leg)
     {
         if (motor) motor->disable();
     }
     for (int i = 0; i < 2; i++)
     {
-        owner->_ctx.data.target_leg_theta[i] = 0.0f;
-        owner->_ctx.data.target_leg_radps[i] = 0.0f;
+        owner->_ctx.data.target_leg_theta[i]       = 0.0f;
+        owner->_ctx.data.target_leg_radps[i]       = 0.0f;
         owner->_ctx.data.out_leg_torque[i]         = 0.0f;
         owner->_ctx.data.out_leg_gravity_torque[i] = 0.0f;
-        owner->_ctx.data.leg_alpha[i]              = 0.0f;
-        owner->_ctx.data.leg_j_dynamic[i]          = 0.0f;
-        owner->_ctx.data.leg_gravity_valid[i]      = false;
         owner->_ctx.data.leg_tau_wall[i]           = 0.0f;
-        owner->_ctx.data.leg_tau_damping[i]        = 0.0f;
         owner->_ctx.data.leg_tau_attitude[i]       = 0.0f;
-        owner->_ctx.data.leg_ff_scale[i]           = 0.0f;
-        owner->_ctx.data.leg_tau_manual_pid[i]     = 0.0f;
-        owner->_ctx.data.leg_control_mode[i]       = 0.0f;
-        owner->_leg_target_smooth[i]               = 0.0f;
-        owner->_leg_zero_interp_init[i]            = false;
-        owner->_leg_manual_map_active[i]           = false;
-        owner->_leg_manual_cmd_offset[i]           = 0.0f;
-        owner->_leg_last_logic_torque[i]           = 0.0f;
-        owner->_leg_en_state[i]                    = false;
+
+        owner->_leg_target_smooth[i]     = 0.0f;
+        owner->_leg_zero_interp_init[i]  = false;
+        owner->_leg_manual_map_active[i] = false;
+        owner->_leg_manual_cmd_offset[i] = 0.0f;
+        owner->_leg_last_logic_torque[i] = 0.0f;
+        owner->_leg_en_state[i]          = false;
     }
-    owner->_ctx.data.att_force_pitch = 0.0f;
-    owner->_ctx.data.att_force_roll  = 0.0f;
+
+    // 纯观察量统一清零，避免 Live Watch 残留主动状态数值。
+    owner->_ctx.telemetry = {};
+
     for (auto *pid : owner->_ctx.pid.leg_pos_pid)
     {
         if (pid) pid->clear();

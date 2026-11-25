@@ -30,8 +30,8 @@ void engineer_chassis_t::leg_state_pid_gravity_t::execute(owner *chassis)
         chassis->_leg_update_vmc_feedforward(
             i, q, qdot, pitch, false, 0.0f, 0.0f);
 
-        chassis->_ctx.data.leg_tau_manual_pid[i] = pid_tau;
-        chassis->_ctx.data.leg_control_mode[i]  = 3.0f;
+        chassis->_ctx.telemetry.leg_tau_manual_pid[i] = pid_tau;
+        chassis->_ctx.telemetry.leg_control_mode[i]   = 3.0f;
 
         const float raw_torque =
             pid_tau +

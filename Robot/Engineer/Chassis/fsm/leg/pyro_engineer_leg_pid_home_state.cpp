@@ -24,8 +24,8 @@ void engineer_chassis_t::leg_state_pid_home_t::execute(owner *chassis)
         const float pid_tau = chassis->_leg_run_dual_pid(i);
 
         chassis->_leg_clear_feedforward(i);
-        chassis->_ctx.data.leg_tau_manual_pid[i] = pid_tau;
-        chassis->_ctx.data.leg_control_mode[i]  = 1.0f;
+        chassis->_ctx.telemetry.leg_tau_manual_pid[i] = pid_tau;
+        chassis->_ctx.telemetry.leg_control_mode[i]   = 1.0f;
 
         chassis->_leg_apply_common_output(i, pid_tau, qdot);
     }

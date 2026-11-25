@@ -13,15 +13,18 @@ void engineer_chassis_t::_leg_handle_disabled(int i)
     _ctx.data.target_leg_radps[i]       = 0.0f;
     _ctx.data.out_leg_torque[i]         = 0.0f;
     _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-    _ctx.data.leg_alpha[i]              = 0.0f;
-    _ctx.data.leg_gravity_valid[i]      = false;
-    _ctx.data.leg_j_dynamic[i]          = 0.0f;
     _ctx.data.leg_tau_wall[i]           = 0.0f;
-    _ctx.data.leg_tau_damping[i]        = 0.0f;
-    _ctx.data.leg_ff_scale[i]           = 0.0f;
-    _ctx.data.leg_tau_manual_pid[i]     = 0.0f;
     _ctx.data.leg_tau_attitude[i]       = 0.0f;
-    _ctx.data.leg_control_mode[i]       = 0.0f;
+
+    _ctx.telemetry.leg_alpha[i]          = 0.0f;
+    _ctx.telemetry.leg_gravity_valid[i]  = false;
+    _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
+    _ctx.telemetry.leg_tau_damping[i]    = 0.0f;
+    _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
+    _ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
+    _ctx.telemetry.leg_control_mode[i]   = 0.0f;
+    _ctx.telemetry.att_force_pitch       = 0.0f;
+    _ctx.telemetry.att_force_roll        = 0.0f;
 
     _leg_target_smooth[i]         = 0.0f;
     _leg_zero_interp_init[i]      = false;
@@ -38,16 +41,19 @@ void engineer_chassis_t::_leg_handle_uncalibrated(int i)
 {
     _ctx.data.out_leg_torque[i]         = 0.0f;
     _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-    _ctx.data.leg_alpha[i]              = 0.0f;
-    _ctx.data.leg_gravity_valid[i]      = false;
-    _ctx.data.leg_j_dynamic[i]          = 0.0f;
     _ctx.data.leg_tau_wall[i]           = 0.0f;
-    _ctx.data.leg_tau_damping[i]        = 0.0f;
-    _ctx.data.leg_ff_scale[i]           = 0.0f;
-    _ctx.data.leg_tau_manual_pid[i]     = 0.0f;
     _ctx.data.leg_tau_attitude[i]       = 0.0f;
-    _ctx.data.leg_control_mode[i]       = 0.0f;
-    _leg_last_logic_torque[i]           = 0.0f;
+
+    _ctx.telemetry.leg_alpha[i]          = 0.0f;
+    _ctx.telemetry.leg_gravity_valid[i]  = false;
+    _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
+    _ctx.telemetry.leg_tau_damping[i]    = 0.0f;
+    _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
+    _ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
+    _ctx.telemetry.leg_control_mode[i]   = 0.0f;
+    _ctx.telemetry.att_force_pitch       = 0.0f;
+    _ctx.telemetry.att_force_roll        = 0.0f;
+    _leg_last_logic_torque[i]            = 0.0f;
 }
 
 
@@ -161,19 +167,17 @@ void engineer_chassis_t::_leg_feedback()
             (1.0f - LEG_IMU_LPF_ALPHA) * _imu_roll_lpf;
     }
 
-    _ctx.data.imu_pitch_raw = raw_pitch;
-    _ctx.data.imu_pitch     = _imu_pitch_lpf;
-    _ctx.data.imu_roll_raw  = raw_roll;
-    _ctx.data.imu_roll      = _imu_roll_lpf;
+    _ctx.telemetry.imu_pitch_raw = raw_pitch;
+    _ctx.data.imu_pitch          = _imu_pitch_lpf;
+    _ctx.telemetry.imu_roll_raw  = raw_roll;
+    _ctx.data.imu_roll           = _imu_roll_lpf;
 
     for (int i = 0; i < 2; i++)
     {
         _ctx.motor.leg[i]->update_feedback();
-        _ctx.data.leg_online[i] = _ctx.motor.leg[i]->is_online();
 
         // 多圈 unwrap：首帧直接初始化，之后按带符号最短角增量累积
         const float raw = _ctx.motor.leg[i]->get_current_position();
-        _ctx.data.leg_raw_position[i] = raw;
 
         if (!_leg_fb_init[i])
         {
@@ -273,25 +277,25 @@ void engineer_chassis_t::_leg_update_vmc_feedforward(
         attitude_tau_q = LEG_Q_XT_SIGN * tau_attitude_xt;
     }
 
-    _ctx.data.leg_alpha[i]              = theta_eval;
-    _ctx.data.leg_j_dynamic[i]          = vmc.j_dynamic;
-    _ctx.data.leg_tau_wall[i]           = vmc_wall_tau;
-    _ctx.data.leg_tau_attitude[i]       = attitude_tau_q;
-    _ctx.data.leg_ff_scale[i]           = 1.0f;
+    _ctx.telemetry.leg_alpha[i]     = theta_eval;
+    _ctx.telemetry.leg_j_dynamic[i] = vmc.j_dynamic;
+    _ctx.data.leg_tau_wall[i]       = vmc_wall_tau;
+    _ctx.data.leg_tau_attitude[i]   = attitude_tau_q;
+    _ctx.telemetry.leg_ff_scale[i]  = 1.0f;
     _ctx.data.out_leg_gravity_torque[i] = gravity_tau;
-    _ctx.data.leg_gravity_valid[i]      = gravity_enable;
+    _ctx.telemetry.leg_gravity_valid[i] = gravity_enable;
 }
 
 // 纯双环 PID 档明确撤掉所有 VMC/前馈观测量，避免 Live Watch 残留上一档数值。
 void engineer_chassis_t::_leg_clear_feedforward(int i)
 {
-    _ctx.data.leg_alpha[i]              = 0.0f;
-    _ctx.data.leg_j_dynamic[i]          = 0.0f;
-    _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-    _ctx.data.leg_gravity_valid[i]      = false;
-    _ctx.data.leg_tau_wall[i]           = 0.0f;
-    _ctx.data.leg_tau_attitude[i]       = 0.0f;
-    _ctx.data.leg_ff_scale[i]           = 0.0f;
+    _ctx.telemetry.leg_alpha[i]          = 0.0f;
+    _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
+    _ctx.data.out_leg_gravity_torque[i]  = 0.0f;
+    _ctx.telemetry.leg_gravity_valid[i]  = false;
+    _ctx.data.leg_tau_wall[i]            = 0.0f;
+    _ctx.data.leg_tau_attitude[i]        = 0.0f;
+    _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
 }
 
 // 左 MID：右摇杆下推增量映射；摇杆回中后冻结当前平滑目标，不自动跳回零点。
@@ -383,7 +387,7 @@ void engineer_chassis_t::_leg_apply_common_output(
     tau_damping = fp32_constrain(
         tau_damping, -LEG_F_JOINT_DAMP_MAX, LEG_F_JOINT_DAMP_MAX);
 
-    _ctx.data.leg_tau_damping[i] = tau_damping;
+    _ctx.telemetry.leg_tau_damping[i] = tau_damping;
     raw_torque += tau_damping;
     raw_torque = fp32_constrain(raw_torque, -LEG_MAX_TORQUE, LEG_MAX_TORQUE);
 
