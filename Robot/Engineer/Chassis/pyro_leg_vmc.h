@@ -10,9 +10,20 @@ static constexpr float LEG_CONTROL_DT_S = 0.001f;
 
 struct leg_vmc_result_t
 {
+    float theta{};       // 实际参与多项式计算的 clamp 后角度
     float j_dynamic{};   // 姿态投影后的动态雅可比
     float tau_gravity{}; // 单腿重力补偿力矩（小坦 theta 帧）
-    bool  valid{false};   // 力平衡分母是否有效
+    bool  valid{false};  // 力平衡分母是否有效
+};
+
+struct leg_feedforward_output_t
+{
+    float theta_xt{};
+    float j_dynamic{};
+    float gravity_tau{};
+    float wall_tau{};
+    float attitude_tau{};
+    bool  gravity_valid{false};
 };
 
 leg_vmc_result_t calc_leg_xiaotan_vmc(float theta_raw, float pitch);

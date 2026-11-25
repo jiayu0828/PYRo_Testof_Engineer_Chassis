@@ -3,34 +3,40 @@
 
 namespace pyro
 {
+namespace
+{
+// Engineer 腿部局部角度展开：不修改 PYRo 通用算法库。
+float unwrap_leg_angle(float previous_angle, float raw_angle)
+{
+    float delta = fmodf(raw_angle - previous_angle, 2.0f * PI);
+    if (delta > PI)
+    {
+        delta -= 2.0f * PI;
+    }
+    else if (delta < -PI)
+    {
+        delta += 2.0f * PI;
+    }
+    return previous_angle + delta;
+}
+} // namespace
+
 // =========================================================
 // 腿部机构算法辅助函数
 // =========================================================
 // 腿失能：输出和积分全部清零，重新使能时不会携带旧力矩或积分冲击。
 void engineer_chassis_t::_leg_handle_disabled(int i)
 {
-    _ctx.data.target_leg_theta[i]       = 0.0f;
-    _ctx.data.target_leg_radps[i]       = 0.0f;
-    _ctx.data.out_leg_torque[i]         = 0.0f;
-    _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-    _ctx.data.leg_tau_wall[i]           = 0.0f;
-    _ctx.data.leg_tau_attitude[i]       = 0.0f;
+    _ctx.data.target_leg_theta[i] = 0.0f;
+    _ctx.data.target_leg_radps[i] = 0.0f;
 
-    _ctx.telemetry.leg_alpha[i]          = 0.0f;
-    _ctx.telemetry.leg_gravity_valid[i]  = false;
-    _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
-    _ctx.telemetry.leg_tau_damping[i]    = 0.0f;
-    _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
-    _ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
-    _ctx.telemetry.leg_control_mode[i]   = 0.0f;
-    _ctx.telemetry.att_force_pitch       = 0.0f;
-    _ctx.telemetry.att_force_roll        = 0.0f;
+    _leg_reset_control_output(i);
+    _leg_reset_leg_telemetry(i);
 
-    _leg_target_smooth[i]         = 0.0f;
-    _leg_zero_interp_init[i]      = false;
-    _leg_manual_map_active[i]     = false;
-    _leg_manual_cmd_offset[i]     = 0.0f;
-    _leg_last_logic_torque[i]     = 0.0f;
+    _leg_target_smooth[i]     = 0.0f;
+    _leg_zero_interp_init[i]  = false;
+    _leg_manual_map_active[i] = false;
+    _leg_manual_cmd_offset[i] = 0.0f;
 
     if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
     if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
@@ -39,11 +45,21 @@ void engineer_chassis_t::_leg_handle_disabled(int i)
 // 已使能但未校准：不输出力矩，等待右拨杆进入 UP 的边沿执行软件置零。
 void engineer_chassis_t::_leg_handle_uncalibrated(int i)
 {
+    _leg_reset_control_output(i);
+    _leg_reset_leg_telemetry(i);
+}
+
+void engineer_chassis_t::_leg_reset_control_output(int i)
+{
     _ctx.data.out_leg_torque[i]         = 0.0f;
     _ctx.data.out_leg_gravity_torque[i] = 0.0f;
     _ctx.data.leg_tau_wall[i]           = 0.0f;
     _ctx.data.leg_tau_attitude[i]       = 0.0f;
+    _leg_last_logic_torque[i]           = 0.0f;
+}
 
+void engineer_chassis_t::_leg_reset_leg_telemetry(int i)
+{
     _ctx.telemetry.leg_alpha[i]          = 0.0f;
     _ctx.telemetry.leg_gravity_valid[i]  = false;
     _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
@@ -51,9 +67,6 @@ void engineer_chassis_t::_leg_handle_uncalibrated(int i)
     _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
     _ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
     _ctx.telemetry.leg_control_mode[i]   = 0.0f;
-    _ctx.telemetry.att_force_pitch       = 0.0f;
-    _ctx.telemetry.att_force_roll        = 0.0f;
-    _leg_last_logic_torque[i]            = 0.0f;
 }
 
 
@@ -97,6 +110,7 @@ leg_vmc_result_t calc_leg_xiaotan_vmc(float theta_raw, float pitch)
     
     const float theta =
         fminf(fmaxf(theta_raw, LEG_MIN_POS), LEG_MAX_POS);
+    result.theta = theta;
 
     const float cp = cosf(pitch);
     const float sp = sinf(pitch);
@@ -176,27 +190,10 @@ void engineer_chassis_t::_leg_feedback()
     {
         _ctx.motor.leg[i]->update_feedback();
 
-        // 多圈 unwrap：首帧直接初始化，之后按带符号最短角增量累积
+        // 多圈展开：首帧对齐 raw，之后按带符号最短角增量累积。
         const float raw = _ctx.motor.leg[i]->get_current_position();
-
-        if (!_leg_fb_init[i])
-        {
-            _last_leg_raw[i] = raw;
-            _leg_fb_init[i]  = true;
-        }
-
-        float delta = raw - _last_leg_raw[i];
-        if (delta > PI)
-        {
-            delta -= 2.0f * PI;
-        }
-        else if (delta < -PI)
-        {
-            delta += 2.0f * PI;
-        }
-
-        _ctx.data.leg_theta_unwrap[i] += delta;
-        _last_leg_raw[i] = raw;
+        _ctx.data.leg_theta_unwrap[i] =
+            unwrap_leg_angle(_ctx.data.leg_theta_unwrap[i], raw);
 
         // 相对角（校准点为 0）：在反馈边界乘该腿唯一安装方向符号
         if (_ctx.data.leg_calibrated[i])
@@ -223,67 +220,52 @@ void engineer_chassis_t::_leg_enter_active_mode(int i, float current_q)
     if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
 }
 
-// 小坦巡航 VMC 重力链 + q 空间软墙；include_attitude=true 时再叠加 Pitch/Roll 映射力矩。
-void engineer_chassis_t::_leg_update_vmc_feedforward(
+// 纯计算：重力/软墙/Pitch-Roll 前馈；不直接写上下文，由状态文件保存结果。
+leg_feedforward_output_t engineer_chassis_t::_leg_calc_feedforward(
     int i, float q, float qdot, float pitch,
     bool include_attitude, float f_pitch, float f_roll)
 {
-    float vmc_wall_tau = 0.0f;
+    leg_feedforward_output_t output{};
 
-    // 多项式有效窗外共用的下端制动墙；起步 q≈0 死区不做主动推腿墙。
+    // 多项式有效窗外的下端制动墙；起步 q≈0 死区不做主动推腿墙。
     if (q < LEG_POLY_Q_VALID_MIN)
     {
-        vmc_wall_tau =
+        float wall_tau =
             LEG_POLY_WALL_K * (LEG_POLY_Q_VALID_MIN - q) -
             LEG_POLY_WALL_D * qdot;
-        vmc_wall_tau = fp32_constrain(
-            vmc_wall_tau, 0.0f, LEG_POLY_WALL_MAX);
+        output.wall_tau = fp32_constrain(
+            wall_tau, 0.0f, LEG_POLY_WALL_MAX);
     }
 
-    const float theta_raw  = LEG_Q_XT_SIGN * q + LEG_POLY_THETA_OFFSET;
-    const float theta_eval = fp32_constrain(
-        theta_raw, LEG_MIN_POS, LEG_MAX_POS);
-
-    const leg_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_eval, pitch);
+    const float theta_raw = LEG_Q_XT_SIGN * q;
+    const leg_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_raw, pitch);
 
     const bool q_window_ok =
-        (q >= LEG_POLY_Q_VALID_MIN && q <= LEG_POLY_Q_VALID_MAX &&
-         theta_raw >= LEG_MIN_POS &&
-         theta_raw <= LEG_MAX_POS);
+        q >= LEG_POLY_Q_VALID_MIN && q <= LEG_POLY_Q_VALID_MAX;
 
-    // theta 帧重力矩按线性坐标变换映射回 q 帧；
-    // 左右腿物理镜像统一留给发送边界的 LEG_MOTOR_SIGN。
-    const float poly_gravity_q =
-        LEG_Q_XT_SIGN * LEG_POLY_GRAVITY_SCALE * vmc.tau_gravity;
-
-    const bool gravity_enable =
+    const float gravity_q = LEG_Q_XT_SIGN * vmc.tau_gravity;
+    output.gravity_valid =
         LEG_VMC_GRAVITY_EN && vmc.valid && q_window_ok &&
-        (fabsf(poly_gravity_q) > 1e-5f);
+        fabsf(gravity_q) > 1e-5f;
 
-    const float gravity_tau = gravity_enable
-        ? fp32_constrain(poly_gravity_q,
+    output.gravity_tau = output.gravity_valid
+        ? fp32_constrain(gravity_q,
                          -LEG_POLY_GRAVITY_TAU_MAX,
                          LEG_POLY_GRAVITY_TAU_MAX)
         : 0.0f;
 
-    // Pitch/Roll 虚拟力 -> 小坦 theta 帧力矩 -> 本车 q 逻辑帧力矩。
-    // Roll 左右腿反号，与小坦 _leg_vmc() 保持一致；q->电机物理方向在发送层处理。
-    float attitude_tau_q = 0.0f;
+    // Pitch/Roll 虚拟力 -> theta 帧力矩 -> q 逻辑帧力矩。
     if (include_attitude)
     {
         const float roll_force_i = (i == 0) ? f_roll : -f_roll;
-        const float tau_attitude_xt =
+        const float attitude_tau_xt =
             vmc.j_dynamic * (f_pitch + roll_force_i);
-        attitude_tau_q = LEG_Q_XT_SIGN * tau_attitude_xt;
+        output.attitude_tau = LEG_Q_XT_SIGN * attitude_tau_xt;
     }
 
-    _ctx.telemetry.leg_alpha[i]     = theta_eval;
-    _ctx.telemetry.leg_j_dynamic[i] = vmc.j_dynamic;
-    _ctx.data.leg_tau_wall[i]       = vmc_wall_tau;
-    _ctx.data.leg_tau_attitude[i]   = attitude_tau_q;
-    _ctx.telemetry.leg_ff_scale[i]  = 1.0f;
-    _ctx.data.out_leg_gravity_torque[i] = gravity_tau;
-    _ctx.telemetry.leg_gravity_valid[i] = gravity_enable;
+    output.theta_xt   = vmc.theta;
+    output.j_dynamic  = vmc.j_dynamic;
+    return output;
 }
 
 // 纯双环 PID 档明确撤掉所有 VMC/前馈观测量，避免 Live Watch 残留上一档数值。
@@ -414,9 +396,6 @@ void engineer_chassis_t::_leg_apply_common_output(
 // =========================================================
 void engineer_chassis_t::_leg_control()
 {
-    const bool vmc_request        = _ctx.cmd->track_run;
-    const bool pid_gravity_request = _ctx.cmd->leg.home_to_zero;
-
     state_t<owner> *target_state = &_leg_state_pid_home;
 
     if (!_ctx.cmd->leg.en)
@@ -428,17 +407,20 @@ void engineer_chassis_t::_leg_control()
         // 两腿共用同一左拨杆模式；任一条腿未完成校准时先进入安全等待态。
         target_state = &_leg_state_uncalibrated;
     }
-    else if (vmc_request)
-    {
-        target_state = &_leg_state_vmc;
-    }
-    else if (pid_gravity_request)
-    {
-        target_state = &_leg_state_pid_gravity;
-    }
     else
     {
-        target_state = &_leg_state_pid_home;
+        switch (_ctx.cmd->left_switch)
+        {
+            case left_switch_cmd_t::UP:
+                target_state = &_leg_state_vmc;
+                break;
+            case left_switch_cmd_t::MID:
+                target_state = &_leg_state_pid_gravity;
+                break;
+            case left_switch_cmd_t::DOWN:
+                target_state = &_leg_state_pid_home;
+                break;
+        }
     }
 
     _leg_fsm.change_state(target_state);

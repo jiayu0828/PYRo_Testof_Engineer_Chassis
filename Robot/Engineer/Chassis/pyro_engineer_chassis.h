@@ -15,6 +15,7 @@
 #include "pyro_warning_drv.h"
 //pyro库相关引用
 #include "engineer_config.h"
+#include "pyro_leg_vmc.h"
 //底盘单独的参数
 namespace pyro
 {
@@ -38,12 +39,19 @@ struct chassis_cmd_t
     float wz; // 旋转角速度 rad/s
 };
 
+// 左拨杆三档：同时决定履带运行状态和腿部控制模式。
+enum class left_switch_cmd_t
+{
+    UP,
+    MID,
+    DOWN
+};
+
 // --- 腿部命令 ---
 struct leg_cmd_t
 {
     bool  en;            // 腿使能（右拨杆 UP）
     bool  calibrate;     // 校准脉冲（右拨杆进入 UP 的那一帧为 true）
-    bool  home_to_zero;  // 历史字段名；当前=true 表示左拨杆 MID：手动双环 PID + 重力/软墙前馈
     float target_theta;  // 左拨杆 MID 右摇杆手动目标相对电机角（两腿同步）
 };
 
@@ -57,11 +65,11 @@ struct engineer_cmd_t final : public cmd_base_t
     bool mecanum_en;   // 麦轮使能（右拨杆 MID/UP）
     bool track_en;     // 履带电机使能（右拨杆 UP）
 
-    // 左拨杆档位组合（底盘内部腿控 HFSM 据此分流，通信层字段名暂时保留）：
-    // UP   = 履带恒速 + 腿部 VMC（重力/软墙/Pitch/Roll 姿态力）；
-    // MID  = 履带停止 + 右摇杆手动双环 PID + 重力/软墙前馈；
+    // 左拨杆档位：
+    // UP   = 履带恒速 + 腿部 VMC；
+    // MID  = 履带停止 + 手动双环 PID + 重力/软墙前馈；
     // DOWN = 履带停止 + 限速回零纯双环 PID。
-    bool track_run;
+    left_switch_cmd_t left_switch{left_switch_cmd_t::DOWN};
 
     engineer_cmd_t()
     {
@@ -71,11 +79,10 @@ struct engineer_cmd_t final : public cmd_base_t
         chassis.wz       = 0.0f;
         leg.en           = false;
         leg.calibrate    = false;
-        leg.home_to_zero = false;
         leg.target_theta = 0.0f;
         mecanum_en       = false;
         track_en         = false;
-        track_run        = false;
+        left_switch      = left_switch_cmd_t::DOWN;
     }
 };
 
@@ -286,10 +293,12 @@ class engineer_chassis_t final
     // =============================================
     void _leg_handle_disabled(int i);
     void _leg_handle_uncalibrated(int i);
+    void _leg_reset_control_output(int i);
+    void _leg_reset_leg_telemetry(int i);
     void _leg_enter_active_mode(int i, float current_q);
-    void _leg_update_vmc_feedforward(int i, float q, float qdot, float pitch,
-                                     bool include_attitude,
-                                     float f_pitch, float f_roll);
+    leg_feedforward_output_t _leg_calc_feedforward(
+        int i, float q, float qdot, float pitch,
+        bool include_attitude, float f_pitch, float f_roll);
     void _leg_clear_feedforward(int i);
     void _leg_update_manual_target(int i, float stick_cmd);
     void _leg_update_home_target(int i, float current_q);
@@ -302,11 +311,8 @@ class engineer_chassis_t final
     hybrid_kin_t *_kinematics{nullptr};
 
     // =============================================
-    // 腿部反馈与控制内部状态
+    // 腿部控制内部状态
     // =============================================
-    float _last_leg_raw[2]{}; // 上一帧电机原始角
-    bool  _leg_fb_init[2]{};  // 首帧初始化标志
-
     float _imu_pitch_lpf{};    // IMU pitch 一阶低通状态
     float _imu_roll_lpf{};     // IMU roll 一阶低通状态
     bool  _imu_lpf_init{false};

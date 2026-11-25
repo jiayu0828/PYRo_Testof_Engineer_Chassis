@@ -54,13 +54,13 @@ constexpr float LEG_CALI_RIGHT = -1.18842185f; // 右腿校准位绝对角
 
 // 手动控腿行程
 constexpr float LEG_MANUAL_MAX = 0.0f;
-constexpr float LEG_MANUAL_MIN = -1.64f;//??
+constexpr float LEG_MANUAL_MIN = -1.72f;//??
 
 constexpr float LEG_TARGET_LERP = 0.02f; // 手动目标角一阶平滑系数
 
 // 当前固定目标 0 回零分支（磁盘现有 !home_mode 分支）的限速线性插值。
 // 插值对象是送入位置环的参考角，单位为腿电机输出轴 q 帧 rad。
-constexpr float LEG_ZERO_INTERP_VMAX = 6.0f;  // 回零参考角最大接近速度 rad/s
+constexpr float LEG_ZERO_INTERP_VMAX = 10.0f;  // 回零参考角最大接近速度 rad/s
 constexpr float LEG_ZERO_INTERP_EPS  = 0.005f; // 参考角到位吸附死区 rad
 
 // 全模式 q 空间主动阻尼：tau_d = -Kd * qdot
@@ -82,14 +82,12 @@ constexpr bool  LEG_VMC_GRAVITY_EN = true;
 constexpr float LEG_GRAVITY        = 9.80665f;  // 重力加速度 m/s²
 constexpr float LEG_POLY_VEH_MASS   = 20.0f;     // 当前 VMC 链使用的整车等效质量 kg
 
-constexpr float LEG_Q_XT_SIGN       = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
-constexpr float LEG_POLY_THETA_OFFSET = 0.0f;
+constexpr float LEG_Q_XT_SIGN = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
 
-// 小坦多项式有效拟合域与本车 q 对应窗口；theta 上下限复用 LEG_MIN_POS/LEG_MAX_POS。
-constexpr float LEG_POLY_Q_VALID_MIN = -1.64f; // q 有效窗下限，对应 theta=1.64
-constexpr float LEG_POLY_Q_VALID_MAX = -0.15f; // q 有效窗上限，对应 theta=0.15
+// 本车 q 有效窗口；对应小坦 theta_XT 的有效拟合域。
+constexpr float LEG_POLY_Q_VALID_MIN = -1.72f;
+constexpr float LEG_POLY_Q_VALID_MAX = 0.0f;
 
-constexpr float LEG_POLY_GRAVITY_SCALE   = 1.0f;  // 对齐小坦 _leg_vmc()，无额外缩放
 constexpr float LEG_POLY_GRAVITY_TAU_MAX = 25.0f; // 重力力矩单独限幅；发送前还有 27N·m 总限幅
 
 // q 有效窗外的本车安全软墙：避免 q≈0 收起侧主动推腿
@@ -98,8 +96,8 @@ constexpr float LEG_POLY_WALL_D   = 8.0f;
 constexpr float LEG_POLY_WALL_MAX = 8.0f;
 
 // 小坦巡航力平衡几何参数（来自小坦 hybrid_config.h）
-constexpr float LEG_MIN_POS      = 0.15f;//需要读数确认
-constexpr float LEG_MAX_POS      = 1.64f;//需要读数确认
+constexpr float LEG_MIN_POS      = 0.0f;//需要读数确认
+constexpr float LEG_MAX_POS      = 1.72f;//需要读数确认
 
 constexpr float LEG_XT_DIST_FRONT   = 0.2395f;
 constexpr float LEG_XT_DIST_HIP     = 0.1805f;
@@ -130,7 +128,7 @@ constexpr float LEG_XT_YB_COEF[LEG_XT_YB_DEGREE + 1] = {
 
 //相关姿态补偿  感觉Pitch 可以调整一下，来适配老左的履带的角度 
 constexpr bool  LEG_ATTITUDE_PID_EN   = true;
-constexpr float LEG_TARGET_PITCH_RAD = 0.10f; // rad
+constexpr float LEG_TARGET_PITCH_RAD = 0.00f; // rad
 constexpr float LEG_TARGET_ROLL_RAD  = 0.0f;  // rad
 
 // =========================================================

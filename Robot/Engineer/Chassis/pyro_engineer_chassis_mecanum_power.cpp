@@ -122,7 +122,7 @@ void engineer_chassis_t::_mecanum_power_control()
     const bool supercap_online = false;
 #endif
 
-    constexpr bool  supercap_extra_power_en     = true;
+    constexpr bool  supercap_extra_power_en     = false;//先不使用我的超级电容
     constexpr float supercap_enable_voltage_v   = 19.0f;
     constexpr float supercap_disable_voltage_v  = 17.5f; // 滞回防抖
 

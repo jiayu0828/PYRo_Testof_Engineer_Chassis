@@ -27,16 +27,21 @@ void engineer_chassis_t::leg_state_pid_gravity_t::execute(owner *chassis)
 
         const float pid_tau = chassis->_leg_run_dual_pid(i);
 
-        chassis->_leg_update_vmc_feedforward(
+        const auto ff = chassis->_leg_calc_feedforward(
             i, q, qdot, pitch, false, 0.0f, 0.0f);
 
+        chassis->_ctx.data.leg_tau_wall[i]           = ff.wall_tau;
+        chassis->_ctx.data.leg_tau_attitude[i]       = ff.attitude_tau;
+        chassis->_ctx.data.out_leg_gravity_torque[i] = ff.gravity_tau;
+        chassis->_ctx.telemetry.leg_alpha[i]         = ff.theta_xt;
+        chassis->_ctx.telemetry.leg_j_dynamic[i]     = ff.j_dynamic;
+        chassis->_ctx.telemetry.leg_ff_scale[i]      = 1.0f;
+        chassis->_ctx.telemetry.leg_gravity_valid[i] = ff.gravity_valid;
         chassis->_ctx.telemetry.leg_tau_manual_pid[i] = pid_tau;
         chassis->_ctx.telemetry.leg_control_mode[i]   = 3.0f;
 
         const float raw_torque =
-            pid_tau +
-            chassis->_ctx.data.out_leg_gravity_torque[i] +
-            chassis->_ctx.data.leg_tau_wall[i];
+            pid_tau + ff.gravity_tau + ff.wall_tau;
 
         chassis->_leg_apply_common_output(i, raw_torque, qdot);
     }

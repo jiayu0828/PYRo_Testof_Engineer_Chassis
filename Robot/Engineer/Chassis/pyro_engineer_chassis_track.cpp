@@ -13,7 +13,9 @@ namespace pyro
 // =========================================================
 void engineer_chassis_t::_track_control()
 {
-    const bool track_run_active = _ctx.cmd->track_en && _ctx.cmd->track_run;
+    const bool track_run_active =
+        _ctx.cmd->track_en &&
+        _ctx.cmd->left_switch == left_switch_cmd_t::UP;
 
     for (int i = 0; i < 2; i++)
     {

@@ -10,6 +10,8 @@ void engineer_chassis_t::leg_state_uncalibrated_t::enter(owner *chassis)
     {
         chassis->_leg_handle_uncalibrated(i);
     }
+    chassis->_ctx.telemetry.att_force_pitch = 0.0f;
+    chassis->_ctx.telemetry.att_force_roll  = 0.0f;
 }
 
 void engineer_chassis_t::leg_state_uncalibrated_t::execute(owner *chassis)
@@ -18,6 +20,8 @@ void engineer_chassis_t::leg_state_uncalibrated_t::execute(owner *chassis)
     {
         chassis->_leg_handle_uncalibrated(i);
     }
+    chassis->_ctx.telemetry.att_force_pitch = 0.0f;
+    chassis->_ctx.telemetry.att_force_roll  = 0.0f;
 }
 
 void engineer_chassis_t::leg_state_uncalibrated_t::exit(owner *chassis)

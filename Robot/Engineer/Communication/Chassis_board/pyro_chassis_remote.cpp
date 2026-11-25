@@ -64,10 +64,19 @@ static void rc_to_cmd()
     s_cmd.leg.calibrate = (s_last_right_sw != sw_pos_t::UP && right_up);
     s_last_right_sw     = right_pos;
 
-    // 左拨杆：UP=履带恒速+VMC；MID=手动双环 PID+重力/软墙前馈；DOWN=纯双环限速回零。
-    // home_to_zero 是历史字段名，当前 true 仅表示左拨杆 MID 的 PID_GRAVITY 子状态。
-    s_cmd.track_run        = (left_pos == sw_pos_t::UP);
-    s_cmd.leg.home_to_zero = (left_pos == sw_pos_t::MID);
+    // 左拨杆三档统一映射为一个枚举，避免历史 bool 命名和非法组合。
+    if (left_pos == sw_pos_t::UP)
+    {
+        s_cmd.left_switch = left_switch_cmd_t::UP;
+    }
+    else if (left_pos == sw_pos_t::MID)
+    {
+        s_cmd.left_switch = left_switch_cmd_t::MID;
+    }
+    else
+    {
+        s_cmd.left_switch = left_switch_cmd_t::DOWN;
+    }
 
     // 左拨杆 MID 时使用的腿手动行程指令（右摇杆 ry，换算到 LEG_MANUAL_MIN 量程）。
     // UP/DOWN 不使用该目标，避免摇杆量干扰 VMC 或回零保持。
