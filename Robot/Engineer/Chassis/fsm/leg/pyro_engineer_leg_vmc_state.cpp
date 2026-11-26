@@ -3,7 +3,7 @@
 namespace pyro
 {
 
-// 左拨杆 UP：VMC 重力/软墙/Pitch-Roll 姿态力状态。
+// 左拨杆 UP：VMC 重力/Pitch-Roll 姿态力状态。
 // 进入瞬间参考角从当前角起步并清双环 PID，保证与其他腿控状态无扰切换。
 void engineer_chassis_t::leg_state_vmc_t::enter(owner *chassis)
 {
@@ -54,13 +54,12 @@ void engineer_chassis_t::leg_state_vmc_t::execute(owner *chassis)
         chassis->_leg_target_smooth[i]            = q;
         chassis->_ctx.data.target_leg_theta[i]   = q;
         chassis->_ctx.data.target_leg_radps[i]   = 0.0f;
-        chassis->_ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
+        chassis->_ctx.telemetry.leg_tau_manual[i] = 0.0f;
         chassis->_ctx.telemetry.leg_control_mode[i]   = 2.0f;
 
         const auto ff = chassis->_leg_calc_feedforward(
             i, q, qdot, pitch, attitude_active, f_pitch, f_roll);
 
-        chassis->_ctx.data.leg_tau_wall[i]           = ff.wall_tau;
         chassis->_ctx.data.leg_tau_attitude[i]       = ff.attitude_tau;
         chassis->_ctx.data.out_leg_gravity_torque[i] = ff.gravity_tau;
         chassis->_ctx.telemetry.leg_alpha[i]         = ff.theta_xt;
@@ -69,7 +68,7 @@ void engineer_chassis_t::leg_state_vmc_t::execute(owner *chassis)
         chassis->_ctx.telemetry.leg_gravity_valid[i] = ff.gravity_valid;
 
         const float raw_torque =
-            ff.gravity_tau + ff.wall_tau + ff.attitude_tau;
+            ff.gravity_tau + ff.attitude_tau;
 
         chassis->_leg_apply_common_output(i, raw_torque, qdot);
     }

@@ -54,7 +54,7 @@ void engineer_chassis_t::_mecanum_power_control_init()
 void engineer_chassis_t::_mecanum_power_control()
 {
     // 麦轮功控运行参数：只作用于 4 个麦轮，不影响履带和腿部。
-    constexpr bool  power_control_en          = true;  // false=旁路，保留麦轮 PID 原始输出
+    constexpr bool  power_control_en          = false;  // false=旁路，保留麦轮 PID 原始输出
     constexpr float default_power_limit_w     = 50.0f; // 无裁判系统时的四轮总预测功率上限 W
     constexpr float default_buffer_energy_j   = 60.0f; // 无裁判系统时的虚拟缓冲能量 J
     constexpr float scale_valid_cmd_threshold = 0.001f; // 判断实际缩放/介入的最小指令差

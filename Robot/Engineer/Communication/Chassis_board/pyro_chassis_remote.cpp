@@ -7,8 +7,8 @@
  * 拨杆分工：
  *   右拨杆 DOWN：麦轮/履带/腿全部失能；MID：4 个麦轮使能；
  *             UP：麦轮、履带和腿使能，进入瞬间校准腿部零点一次。
- *   左拨杆 UP：履带按固定 RPM 恒速旋转，同时腿部进入 VMC（重力/软墙/Pitch/Roll 补偿）；
- *             MID：履带目标 0，腿部右摇杆手动双环 PID，并叠加重力/软墙前馈；
+ *   左拨杆 UP：履带按固定 RPM 恒速旋转，同时腿部进入 VMC（重力/Pitch/Roll 补偿）；
+ *             MID：履带目标 0，腿部右摇杆直接给力矩，并叠加重力补偿；
  *             DOWN：履带目标 0，腿部纯双环 PID 限速返回校准零点。
  *   右拨杆 UP 仍负责履带/腿电机使能；右拨杆非 UP 时即使左拨杆 UP 也不会输出履带力矩。
  * 后续若改为板间通信/自动任务，只需替换本层，模块内部无需改动。
@@ -78,11 +78,10 @@ static void rc_to_cmd()
         s_cmd.left_switch = left_switch_cmd_t::DOWN;
     }
 
-    // 左拨杆 MID 时使用的腿手动行程指令（右摇杆 ry，换算到 LEG_MANUAL_MIN 量程）。
-    // UP/DOWN 不使用该目标，避免摇杆量干扰 VMC 或回零保持。
+    // 左拨杆 MID：右摇杆下推直接映射为 q 帧负向力矩；UP/DOWN 不使用该量。
     const float ry      = apply_deadzone(rc.axes.ry);
     const float ry_down = (ry < 0.0f) ? ry : 0.0f;
-    s_cmd.leg.target_theta = ry_down * (-LEG_MANUAL_MIN);
+    s_cmd.leg.manual_torque = ry_down * LEG_MID_MANUAL_TORQUE_MAX;
 
     // 顶层模式：右拨杆 DOWN 或遥控器掉线 -> PASSIVE，否则 ACTIVE
     if (right_pos != sw_pos_t::DOWN &&

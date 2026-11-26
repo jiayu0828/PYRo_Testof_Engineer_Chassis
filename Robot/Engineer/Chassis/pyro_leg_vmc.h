@@ -21,7 +21,6 @@ struct leg_feedforward_output_t
     float theta_xt{};
     float j_dynamic{};
     float gravity_tau{};
-    float wall_tau{};
     float attitude_tau{};
     bool  gravity_valid{false};
 };

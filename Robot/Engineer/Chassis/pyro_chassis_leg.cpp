@@ -35,8 +35,6 @@ void engineer_chassis_t::_leg_handle_disabled(int i)
 
     _leg_target_smooth[i]     = 0.0f;
     _leg_zero_interp_init[i]  = false;
-    _leg_manual_map_active[i] = false;
-    _leg_manual_cmd_offset[i] = 0.0f;
 
     if (_ctx.pid.leg_pos_pid[i]) _ctx.pid.leg_pos_pid[i]->clear();
     if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
@@ -53,7 +51,6 @@ void engineer_chassis_t::_leg_reset_control_output(int i)
 {
     _ctx.data.out_leg_torque[i]         = 0.0f;
     _ctx.data.out_leg_gravity_torque[i] = 0.0f;
-    _ctx.data.leg_tau_wall[i]           = 0.0f;
     _ctx.data.leg_tau_attitude[i]       = 0.0f;
     _leg_last_logic_torque[i]           = 0.0f;
 }
@@ -65,7 +62,7 @@ void engineer_chassis_t::_leg_reset_leg_telemetry(int i)
     _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
     _ctx.telemetry.leg_tau_damping[i]    = 0.0f;
     _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
-    _ctx.telemetry.leg_tau_manual_pid[i] = 0.0f;
+    _ctx.telemetry.leg_tau_manual[i]     = 0.0f;
     _ctx.telemetry.leg_control_mode[i]   = 0.0f;
 }
 
@@ -88,8 +85,6 @@ void engineer_chassis_t::_calibrate_leg()
         _ctx.data.target_leg_radps[i]  = 0.0f;
         _leg_target_smooth[i]          = 0.0f;
         _leg_zero_interp_init[i]       = false;
-        _leg_manual_map_active[i]       = false;
-        _leg_manual_cmd_offset[i]      = 0.0f;
         _ctx.data.leg_calibrated[i]    = true;
 
         // 清 PID，避免切换瞬间积分突变
@@ -211,8 +206,6 @@ void engineer_chassis_t::_leg_feedback()
 // 任一有效腿控子状态进入瞬间：参考角从当前角起步并清双环积分，保证无扰切换。
 void engineer_chassis_t::_leg_enter_active_mode(int i, float current_q)
 {
-    _leg_manual_map_active[i] = false;
-    _leg_manual_cmd_offset[i] = 0.0f;
     _leg_zero_interp_init[i]  = false;
     _leg_target_smooth[i]     = current_q;
 
@@ -220,22 +213,12 @@ void engineer_chassis_t::_leg_enter_active_mode(int i, float current_q)
     if (_ctx.pid.leg_vel_pid[i]) _ctx.pid.leg_vel_pid[i]->clear();
 }
 
-// 纯计算：重力/软墙/Pitch-Roll 前馈；不直接写上下文，由状态文件保存结果。
+// 纯计算：重力/Pitch-Roll 前馈；不直接写上下文，由状态文件保存结果。
 leg_feedforward_output_t engineer_chassis_t::_leg_calc_feedforward(
     int i, float q, float qdot, float pitch,
     bool include_attitude, float f_pitch, float f_roll)
 {
     leg_feedforward_output_t output{};
-
-    // 多项式有效窗外的下端制动墙；起步 q≈0 死区不做主动推腿墙。
-    if (q < LEG_POLY_Q_VALID_MIN)
-    {
-        float wall_tau =
-            LEG_POLY_WALL_K * (LEG_POLY_Q_VALID_MIN - q) -
-            LEG_POLY_WALL_D * qdot;
-        output.wall_tau = fp32_constrain(
-            wall_tau, 0.0f, LEG_POLY_WALL_MAX);
-    }
 
     const float theta_raw = LEG_Q_XT_SIGN * q;
     const leg_vmc_result_t vmc = calc_leg_xiaotan_vmc(theta_raw, pitch);
@@ -275,38 +258,8 @@ void engineer_chassis_t::_leg_clear_feedforward(int i)
     _ctx.telemetry.leg_j_dynamic[i]      = 0.0f;
     _ctx.data.out_leg_gravity_torque[i]  = 0.0f;
     _ctx.telemetry.leg_gravity_valid[i]  = false;
-    _ctx.data.leg_tau_wall[i]            = 0.0f;
     _ctx.data.leg_tau_attitude[i]        = 0.0f;
     _ctx.telemetry.leg_ff_scale[i]       = 0.0f;
-}
-
-// 左 MID：右摇杆下推增量映射；摇杆回中后冻结当前平滑目标，不自动跳回零点。
-void engineer_chassis_t::_leg_update_manual_target(int i, float stick_cmd)
-{
-    _leg_zero_interp_init[i] = false;
-
-    if (stick_cmd < -LEG_MANUAL_STICK_EPS)
-    {
-        // 第一次推摇杆时把当前平滑目标作为基准，避免中位命令 0 造成目标跳变。
-        if (!_leg_manual_map_active[i])
-        {
-            _leg_manual_map_active[i] = true;
-            _leg_manual_cmd_offset[i] =
-                _leg_target_smooth[i] - stick_cmd;
-        }
-
-        float desired = stick_cmd + _leg_manual_cmd_offset[i];
-        desired = fp32_constrain(desired, LEG_MANUAL_MIN, LEG_MANUAL_MAX);
-
-        _leg_target_smooth[i] +=
-            (desired - _leg_target_smooth[i]) * LEG_TARGET_LERP;
-        _leg_target_smooth[i] = fp32_constrain(
-            _leg_target_smooth[i], LEG_MANUAL_MIN, LEG_MANUAL_MAX);
-    }
-    else
-    {
-        _leg_manual_map_active[i] = false;
-    }
 }
 
 // 左 DOWN：最终目标为校准零点，但位置环参考按最大速度逐步接近，避免目标阶跃。
@@ -331,9 +284,6 @@ void engineer_chassis_t::_leg_update_home_target(int i, float current_q)
     {
         _leg_target_smooth[i] = home_goal;
     }
-
-    _leg_manual_map_active[i] = false;
-    _leg_manual_cmd_offset[i] = 0.0f;
 }
 
 // 位置环 -> 速度环；返回速度环 PID 输出的逻辑力矩。

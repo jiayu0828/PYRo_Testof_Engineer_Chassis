@@ -50,9 +50,9 @@ enum class left_switch_cmd_t
 // --- 腿部命令 ---
 struct leg_cmd_t
 {
-    bool  en;            // 腿使能（右拨杆 UP）
-    bool  calibrate;     // 校准脉冲（右拨杆进入 UP 的那一帧为 true）
-    float target_theta;  // 左拨杆 MID 右摇杆手动目标相对电机角（两腿同步）
+    bool  en;             // 腿使能（右拨杆 UP）
+    bool  calibrate;      // 校准脉冲（右拨杆进入 UP 的那一帧为 true）
+    float manual_torque;  // 左拨杆 MID 右摇杆直接给出的 q 帧力矩
 };
 
 // --- 总命令结构体 ---
@@ -67,8 +67,8 @@ struct engineer_cmd_t final : public cmd_base_t
 
     // 左拨杆档位：
     // UP   = 履带恒速 + 腿部 VMC；
-    // MID  = 履带停止 + 手动双环 PID + 重力/软墙前馈；
-    // DOWN = 履带停止 + 限速回零纯双环 PID。
+    // MID  = 履带停止 + 摇杆直接力矩 + 重力补偿；
+    // DOWN = 履带停止 + 限速回零双环 PID。
     left_switch_cmd_t left_switch{left_switch_cmd_t::DOWN};
 
     engineer_cmd_t()
@@ -77,9 +77,9 @@ struct engineer_cmd_t final : public cmd_base_t
         chassis.vx       = 0.0f;
         chassis.vy       = 0.0f;
         chassis.wz       = 0.0f;
-        leg.en           = false;
-        leg.calibrate    = false;
-        leg.target_theta = 0.0f;
+        leg.en             = false;
+        leg.calibrate      = false;
+        leg.manual_torque  = 0.0f;
         mecanum_en       = false;
         track_en         = false;
         left_switch      = left_switch_cmd_t::DOWN;
@@ -151,8 +151,8 @@ struct engineer_debug_telemetry_t
     bool  leg_gravity_valid[2]{};      // 重力前馈是否有效
     float leg_j_dynamic[2]{};          // 当前姿态下的动态雅可比标量
     float leg_tau_damping[2]{};        // q 空间主动阻尼力矩 N·m
-    float leg_ff_scale[2]{};           // 重力/软墙前馈投入标志（1=投入，0=纯 PID）
-    float leg_tau_manual_pid[2]{};     // MID/DOWN 双环 PID 输出力矩 N·m
+    float leg_ff_scale[2]{};           // 重力前馈投入标志（1=投入，0=未投入）
+    float leg_tau_manual[2]{};         // MID 摇杆力矩或 DOWN 回零 PID 力矩 N·m
     float leg_control_mode[2]{};       // 0/1/2/3 腿控模式观察值
     float att_force_pitch{};           // Pitch PID 输出的任务空间虚拟力 N
     float att_force_roll{};            // Roll PID 输出的左右差动力 N
@@ -191,7 +191,6 @@ struct engineer_data_ctx_t
     float target_leg_radps[2]{};       // 位置环输出的目标角速度
     float out_leg_torque[2]{};         // 最终输出逻辑力矩 N·m
     float out_leg_gravity_torque[2]{}; // 重力前馈力矩（q 逻辑坐标系，N·m）
-    float leg_tau_wall[2]{};           // q 空间软墙力矩 N·m
     float leg_tau_attitude[2]{};       // Pitch/Roll 姿态映射后的 q 帧力矩 N·m
     bool  leg_calibrated[2]{};         // 是否已校准
 
@@ -300,7 +299,6 @@ class engineer_chassis_t final
         int i, float q, float qdot, float pitch,
         bool include_attitude, float f_pitch, float f_roll);
     void _leg_clear_feedforward(int i);
-    void _leg_update_manual_target(int i, float stick_cmd);
     void _leg_update_home_target(int i, float current_q);
     float _leg_run_dual_pid(int i);
     void _leg_apply_common_output(int i, float raw_torque, float qdot);
@@ -319,8 +317,6 @@ class engineer_chassis_t final
 
     float _leg_target_smooth[2]{};      // 送入位置环的平滑参考角
     bool  _leg_zero_interp_init[2]{};   // DOWN 限速回零参考已从当前角初始化
-    bool  _leg_manual_map_active[2]{};  // MID 首次下推摇杆后的基准映射状态
-    float _leg_manual_cmd_offset[2]{};  // MID 摇杆量到平滑目标的映射偏置
     float _leg_last_logic_torque[2]{};  // 上一帧最终逻辑力矩，用于斜率限制
 
     // 各电机当前使能状态（边沿检测用，避免每周期重复发 enable/disable 帧）

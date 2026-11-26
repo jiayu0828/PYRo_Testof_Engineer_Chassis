@@ -114,11 +114,11 @@ static void deps_init()
     {
         // 外环位置环：角度误差 -> 目标角速度 rad/s；积分限幅/输出限幅均为 5.655 rad/s
         s_deps->pid_deps.leg_pos_pid[i] =
-            new pid_t(8.0f, 0.0f, 0.0f, 0.0f, 5.655f,
+            new pid_t(8.0f, 0.0f, 0.5f, 0.0f, 12.0f,
                       pid_t::INTEGRAL_LIMIT);//降低最大速度
         // 内环速度环：速度误差 -> 力矩 N·m；积分限幅/输出限幅均为 27 N·m
         s_deps->pid_deps.leg_vel_pid[i] =
-            new pid_t(1.0f, 0.5f, 0.0f, 27.0f, 27.0f,
+            new pid_t(10.0f, 0.0f, 0.5f, 27.0f, 27.0f,
                       pid_t::INTEGRAL_LIMIT);
     }
 
@@ -126,7 +126,7 @@ static void deps_init()
     // 参数顺序：Kp, Ki, Kd, 积分限幅, 输出限幅,
     //          输出滤波截止/阶数, 微分滤波截止/阶数, OLS 阶数, 改善选项。
     s_deps->pid_deps.pitch_pid = new pid_t(
-        360.0f, 0.0f, 5.0f,
+        600.0f, 0.0f, 5.0f,
         20.0f, 200.0f,
         200.0f, 1U,
         100.0f, 1U,

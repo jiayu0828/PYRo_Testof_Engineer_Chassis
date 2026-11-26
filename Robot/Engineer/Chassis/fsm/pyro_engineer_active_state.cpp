@@ -51,7 +51,7 @@ void engineer_chassis_t::state_active_t::execute(owner *owner)
     owner->_mecanum_control();      // 3. 麦轮速度环 + 四轮麦轮功控
     owner->_supercap_control();     // 4. 超级电容板使能/保活命令
     owner->_track_control();        // 5. 履带恒速/停止速度环
-    owner->_leg_control();          // 6. 腿控子 HFSM：UP VMC / MID PID+重力 / DOWN 纯PID回零
+    owner->_leg_control();          // 6. 腿控子 HFSM：UP VMC / MID 摇杆力矩+重力 / DOWN PID回零
     owner->_send_motor_command();   // 7. 发送电机指令
 }
 

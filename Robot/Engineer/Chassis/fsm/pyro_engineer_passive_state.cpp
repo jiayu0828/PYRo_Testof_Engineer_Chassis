@@ -59,13 +59,10 @@ void engineer_chassis_t::state_passive_t::enter(owner *owner)
         owner->_ctx.data.target_leg_radps[i]       = 0.0f;
         owner->_ctx.data.out_leg_torque[i]         = 0.0f;
         owner->_ctx.data.out_leg_gravity_torque[i] = 0.0f;
-        owner->_ctx.data.leg_tau_wall[i]           = 0.0f;
         owner->_ctx.data.leg_tau_attitude[i]       = 0.0f;
 
         owner->_leg_target_smooth[i]     = 0.0f;
         owner->_leg_zero_interp_init[i]  = false;
-        owner->_leg_manual_map_active[i] = false;
-        owner->_leg_manual_cmd_offset[i] = 0.0f;
         owner->_leg_last_logic_torque[i] = 0.0f;
         owner->_leg_en_state[i]          = false;
     }

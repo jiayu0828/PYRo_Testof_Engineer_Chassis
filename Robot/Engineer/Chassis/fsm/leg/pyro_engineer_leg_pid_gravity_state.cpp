@@ -3,8 +3,8 @@
 namespace pyro
 {
 
-// 左拨杆 MID：右摇杆手动目标 + 位置/速度双环 PID，叠加重力/软墙前馈。
-// 当前档位不叠加 Pitch/Roll 姿态虚拟力，便于先验证重力前馈符号和大小。
+// 左拨杆 MID：右摇杆直接力矩 + 重力补偿，不经过位置/速度 PID。
+// 当前档位不叠加 Pitch/Roll 姿态虚拟力；阻尼、限幅和斜率限制仍作为安全边界。
 void engineer_chassis_t::leg_state_pid_gravity_t::enter(owner *chassis)
 {
     for (int i = 0; i < 2; ++i)
@@ -22,26 +22,23 @@ void engineer_chassis_t::leg_state_pid_gravity_t::execute(owner *chassis)
         const float qdot  = chassis->_ctx.data.current_leg_radps[i];
         const float pitch = chassis->_ctx.data.imu_pitch;
 
-        chassis->_leg_update_manual_target(
-            i, chassis->_ctx.cmd->leg.target_theta);
-
-        const float pid_tau = chassis->_leg_run_dual_pid(i);
+        const float manual_torque = chassis->_ctx.cmd->leg.manual_torque;
 
         const auto ff = chassis->_leg_calc_feedforward(
             i, q, qdot, pitch, false, 0.0f, 0.0f);
 
-        chassis->_ctx.data.leg_tau_wall[i]           = ff.wall_tau;
-        chassis->_ctx.data.leg_tau_attitude[i]       = ff.attitude_tau;
+        chassis->_ctx.data.target_leg_theta[i]   = q;
+        chassis->_ctx.data.target_leg_radps[i]   = 0.0f;
+        chassis->_ctx.data.leg_tau_attitude[i]   = ff.attitude_tau;
         chassis->_ctx.data.out_leg_gravity_torque[i] = ff.gravity_tau;
         chassis->_ctx.telemetry.leg_alpha[i]         = ff.theta_xt;
         chassis->_ctx.telemetry.leg_j_dynamic[i]     = ff.j_dynamic;
         chassis->_ctx.telemetry.leg_ff_scale[i]      = 1.0f;
         chassis->_ctx.telemetry.leg_gravity_valid[i] = ff.gravity_valid;
-        chassis->_ctx.telemetry.leg_tau_manual_pid[i] = pid_tau;
-        chassis->_ctx.telemetry.leg_control_mode[i]   = 3.0f;
+        chassis->_ctx.telemetry.leg_tau_manual[i]    = manual_torque;
+        chassis->_ctx.telemetry.leg_control_mode[i]  = 3.0f;
 
-        const float raw_torque =
-            pid_tau + ff.gravity_tau + ff.wall_tau;
+        const float raw_torque = manual_torque + ff.gravity_tau;
 
         chassis->_leg_apply_common_output(i, raw_torque, qdot);
     }

@@ -46,21 +46,18 @@ constexpr float MAX_CHASSIS_WZ = 4.5f; // 最大旋转角速度 rad/s
 // 3. 后腿电机、手动模式与输出安全参数
 // =========================================================
 constexpr float LEG_MAX_TORQUE = 27.0f;  // 腿电机最终输出力矩上限 N·m
-constexpr float LEG_MAX_SPEED  = 5.655f; // 腿电机输出轴速度上限 rad/s
+constexpr float LEG_MAX_SPEED  = 12.0f; // 腿电机输出轴速度上限 rad/s
 
 // 腿部软件校准点
 constexpr float LEG_CALI_LEFT  = 1.03348756f;  // 左腿校准位绝对角
 constexpr float LEG_CALI_RIGHT = -1.18842185f; // 右腿校准位绝对角
 
-// 手动控腿行程
-constexpr float LEG_MANUAL_MAX = 0.0f;
-constexpr float LEG_MANUAL_MIN = -1.72f;//??
-
-constexpr float LEG_TARGET_LERP = 0.02f; // 手动目标角一阶平滑系数
+// MID 档：右摇杆下推直接叠加的 q 帧最大手动力矩。
+constexpr float LEG_MID_MANUAL_TORQUE_MAX = 8.0f;
 
 // 当前固定目标 0 回零分支（磁盘现有 !home_mode 分支）的限速线性插值。
 // 插值对象是送入位置环的参考角，单位为腿电机输出轴 q 帧 rad。
-constexpr float LEG_ZERO_INTERP_VMAX = 10.0f;  // 回零参考角最大接近速度 rad/s
+constexpr float LEG_ZERO_INTERP_VMAX = 12.0f;  // 回零参考角最大接近速度 rad/s
 constexpr float LEG_ZERO_INTERP_EPS  = 0.005f; // 参考角到位吸附死区 rad
 
 // 全模式 q 空间主动阻尼：tau_d = -Kd * qdot
@@ -70,9 +67,6 @@ constexpr float LEG_F_JOINT_DAMP_MAX = 6.0f; // N·m
 // 输出斜率限制：每 1ms 周期最大力矩变化量 N·m，抑制模式切换/有效域跳变冲击
 constexpr float LEG_F_TORQUE_SLEW_STEP = 0.20f;
 
-// 左拨杆 DOWN 手动控腿时，右摇杆下推判定死区；MID 回零分支不使用摇杆。
-constexpr float LEG_MANUAL_STICK_EPS = 0.05f;
-
 // =========================================================
 // 5. 小坦巡航 _leg_vmc() 适配链（仅左拨杆 UP 投入）
 // ---------------------------------------------------------
@@ -80,7 +74,7 @@ constexpr float LEG_MANUAL_STICK_EPS = 0.05f;
 // 不是电机硬件安装方向；硬件方向统一看第 0 节 MOTOR_SIGN 表。
 constexpr bool  LEG_VMC_GRAVITY_EN = true;
 constexpr float LEG_GRAVITY        = 9.80665f;  // 重力加速度 m/s²
-constexpr float LEG_POLY_VEH_MASS   = 20.0f;     // 当前 VMC 链使用的整车等效质量 kg
+constexpr float LEG_POLY_VEH_MASS   = 25.0f;     // 当前 VMC 链使用的整车等效质量 kg
 
 constexpr float LEG_Q_XT_SIGN = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
 
@@ -89,11 +83,6 @@ constexpr float LEG_POLY_Q_VALID_MIN = -1.72f;
 constexpr float LEG_POLY_Q_VALID_MAX = 0.0f;
 
 constexpr float LEG_POLY_GRAVITY_TAU_MAX = 25.0f; // 重力力矩单独限幅；发送前还有 27N·m 总限幅
-
-// q 有效窗外的本车安全软墙：避免 q≈0 收起侧主动推腿
-constexpr float LEG_POLY_WALL_K   = 80.0f;
-constexpr float LEG_POLY_WALL_D   = 8.0f;
-constexpr float LEG_POLY_WALL_MAX = 8.0f;
 
 // 小坦巡航力平衡几何参数（来自小坦 hybrid_config.h）
 constexpr float LEG_MIN_POS      = 0.0f;//需要读数确认
@@ -128,7 +117,7 @@ constexpr float LEG_XT_YB_COEF[LEG_XT_YB_DEGREE + 1] = {
 
 //相关姿态补偿  感觉Pitch 可以调整一下，来适配老左的履带的角度 
 constexpr bool  LEG_ATTITUDE_PID_EN   = true;
-constexpr float LEG_TARGET_PITCH_RAD = 0.00f; // rad
+constexpr float LEG_TARGET_PITCH_RAD = 0.10f; // rad
 constexpr float LEG_TARGET_ROLL_RAD  = 0.0f;  // rad
 
 // =========================================================
