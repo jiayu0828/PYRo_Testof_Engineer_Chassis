@@ -13,9 +13,24 @@ namespace pyro
 // =========================================================
 void engineer_chassis_t::_kinematics_solve()
 {
+    float vx_cmd = _ctx.cmd->chassis.vx;
+
+    // 上台阶模式只限制麦轮纵向目标速度，不改变遥控原始命令和履带固定 RPM。
+    if (_ctx.cmd->left_switch == left_switch_cmd_t::UP)
+    {
+        if (vx_cmd > CLIMB_MAX_VX)
+        {
+            vx_cmd = CLIMB_MAX_VX;
+        }
+        else if (vx_cmd < -CLIMB_MAX_VX)
+        {
+            vx_cmd = -CLIMB_MAX_VX;
+        }
+    }
+
     // 当前履带不参与底盘 vx/vy/wz 解算，这里只解算 4 个麦轮
     const auto wheel_speeds = _kinematics->solve(
-        _ctx.cmd->chassis.vx,
+        vx_cmd,
         _ctx.cmd->chassis.vy,
         _ctx.cmd->chassis.wz,
         false);

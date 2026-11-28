@@ -42,6 +42,9 @@ constexpr float MAX_CHASSIS_VX = 3.0f; // 最大前后速度 m/s
 constexpr float MAX_CHASSIS_VY = 3.0f; // 最大左右速度 m/s
 constexpr float MAX_CHASSIS_WZ = 4.5f; // 最大旋转角速度 rad/s
 
+// 左拨杆 UP 上台阶时的麦轮纵向速度上限，不影响普通行驶和履带固定 RPM。
+constexpr float CLIMB_MAX_VX = 0.4f;
+
 // =========================================================
 // 3. 后腿电机、手动模式与输出安全参数
 // =========================================================
@@ -74,7 +77,7 @@ constexpr float LEG_F_TORQUE_SLEW_STEP = 0.20f;
 // 不是电机硬件安装方向；硬件方向统一看第 0 节 MOTOR_SIGN 表。
 constexpr bool  LEG_VMC_GRAVITY_EN = true;
 constexpr float LEG_GRAVITY        = 9.80665f;  // 重力加速度 m/s²
-constexpr float LEG_POLY_VEH_MASS   = 25.0f;     // 当前 VMC 链使用的整车等效质量 kg
+constexpr float LEG_POLY_VEH_MASS   = 20.0f;     // 当前 VMC 链使用的整车等效质量 kg
 
 constexpr float LEG_Q_XT_SIGN = -1.0f; // q 帧 <-> 小坦 theta_XT 帧变换符号
 

@@ -20,7 +20,7 @@
 
 using namespace pyro;
 
-static constexpr uint8_t  DEBUG_VAR_COUNT  = 4;
+static constexpr uint8_t  DEBUG_VAR_COUNT  = 8;//现在变成8个通道
 static constexpr uint32_t DEBUG_PERIOD_MS  = 10;
 
 static const uint8_t JCOM_FRAME_TAIL[4] = {0x00, 0x00, 0x80, 0x7F};
@@ -66,11 +66,12 @@ static void debug_thread(void *argument)
             const auto &ctx = s_chassis->get_ctx();
             const auto &d   = ctx.data;
 
-            vars[0] = d.power_meter_w;
-            vars[1] = ctx.supercap.voltage_v;
-            vars[2] = ctx.supercap.extra_power_w;
-            vars[3] = ctx.supercap.chassis_power_w;
-
+            vars[0] = d.out_wheel_torque[0];
+            vars[1] = d.target_wheel_rpm[0];
+            vars[2] = d.current_wheel_rpm[0];
+            vars[3] = d.out_wheel_torque[1];
+            vars[4] = d.target_wheel_rpm[1];
+            vars[5] = d.current_wheel_rpm[1];
             jcom_send(vars);
         }
 

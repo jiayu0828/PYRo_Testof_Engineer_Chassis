@@ -53,10 +53,17 @@ static void deps_init()
         // 参数顺序：Kp, Ki, Kd, 积分限幅, 输出限幅,
         //          输出滤波截止/阶数, 微分滤波截止/阶数, OLS 阶数。
         s_deps->pid_deps.mecanum_pid[i] =
-            new pid_t(0.3f, 0.0008f, 0.0002f,
-                      1.0f, 10.0f,
-                      20.0f, 1U,
-                      0.0f, 0U, 0U);
+            new pid_t(
+                    0.3f,       // Kp
+                    0.0000f,    // Ki
+                    0.00004f,    // Kd
+                    0.0f,       // 积分项上限 ±1
+                    15.0f,      // 最终输出上限 ±10
+                    20.0f, 1U,  // 输出低通：20Hz，1阶
+                    20.0f, 1U,   // 不启用微分滤波
+                    0U,         // 不启用 OLS
+                    pid_t::INTEGRAL_LIMIT|pid_t::OUTPUT_FILTER
+                    );
     }
 
     /* ---------- 履带电机（达妙 4310，CAN2） ---------- */
